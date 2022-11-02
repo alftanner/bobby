@@ -1,4 +1,3 @@
-//+build windows
 //+private
 package simple_window
 

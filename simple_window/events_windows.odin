@@ -1,10 +1,9 @@
-//+build windows
 //+private
 package simple_window
 
+import "core:fmt"
+import "core:runtime"
 import win32 "core:sys/windows"
-
-import "core:log"
 
 _next_event :: proc(window: ^Window) {
 	msg: win32.MSG = ---
@@ -14,8 +13,6 @@ _next_event :: proc(window: ^Window) {
 }
 
 _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wparam: win32.WPARAM, lparam: win32.LPARAM) -> (result: win32.LRESULT) {
-	context = thread_context.init_ctx
-
 	window, ok := &window_handle.?
 	if !ok {
 		return win32.DefWindowProcW(winid, msg, wparam, lparam)
@@ -25,9 +22,11 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 
 	switch msg {
 	case win32.WM_INPUTLANGCHANGE:
-		log.debugf("IC {:x}: {:x} {:x}", msg, wparam, lparam)
+		context = runtime.default_context()
+		fmt.printf("IC {:x}: {:x} {:x}\n", msg, wparam, lparam)
 	case win32.WM_INPUTLANGCHANGEREQUEST:
-		log.debugf("ICR {:x}: {:x} {:x}", msg, wparam, lparam)
+		context = runtime.default_context()
+		fmt.printf("ICR {:x}: {:x} {:x}\n", msg, wparam, lparam)
 	case win32.WM_WINDOWPOSCHANGING: // limit window size, if need be
 		pos := cast(^win32.WINDOWPOS)cast(uintptr)lparam
 
@@ -242,8 +241,10 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 	}
 
 	if ev != nil {
-		context = thread_context.event_ctx
-		thread_context.event_handler(window, ev)
+		if window.event_handler != nil {
+			context = window.event_context.? or_else runtime.default_context()
+			window->event_handler(ev)
+		}
 	}
 
 	if _, ok := ev.(Close_Event); ok && !window.must_close {

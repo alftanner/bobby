@@ -10,6 +10,8 @@ import "core:dynlib"
 import "core:runtime"
 
 DirectSound_Context :: struct {
+	_lib: dynlib.Library,
+
 	DirectSoundCreate : proc "std" (lpcGuidDevice: win32.LPCGUID, ppDS: ^LPDIRECTSOUND, pUnkOuter: LPUNKNOWN) -> win32.HRESULT,
 	DirectSoundCreate8 : proc "std" (lpcGuidDevice: win32.LPCGUID, ppDS8: ^LPDIRECTSOUND8, pUnkOuter: LPUNKNOWN) -> win32.HRESULT,
 	DirectSoundCaptureCreate : proc "std" (lpcGUID: win32.LPCGUID, lplpDSC: ^LPDIRECTSOUNDCAPTURE, pUnkOuter: LPUNKNOWN) -> win32.HRESULT,
@@ -31,20 +33,18 @@ DirectSound_Context :: struct {
 	) -> win32.HRESULT,
 
 	GetDeviceID : proc "std" (pGuidSrc: win32.LPCGUID, pGuidDest: win32.LPCGUID) -> win32.HRESULT,
-
-	__lib_handle: dynlib.Library,
 }
 
 init :: proc(ds: ^DirectSound_Context) -> bool {
-	ds.__lib_handle = dynlib.load_library("dsound.dll") or_return
+	ds._lib = dynlib.load_library("dsound.dll") or_return
 
 	ti := runtime.type_info_base(type_info_of(DirectSound_Context))
 	s, _ := ti.variant.(runtime.Type_Info_Struct)
 
 	for fname, i in s.names {
-		if fname == "__lib_handle" do continue
+		if fname == "_lib" do continue
 
-		proc_ptr, exists := dynlib.symbol_address(ds.__lib_handle, fname)
+		proc_ptr, exists := dynlib.symbol_address(ds._lib, fname)
 		if !exists do continue
 
 		field_ptr := cast(^rawptr)(uintptr(ds) + s.offsets[i])
@@ -55,7 +55,7 @@ init :: proc(ds: ^DirectSound_Context) -> bool {
 }
 
 destroy :: proc(ctx: ^DirectSound_Context) {
-	if ctx.__lib_handle == nil do return
+	if ctx._lib == nil do return
 
-	dynlib.unload_library(ctx.__lib_handle)
+	dynlib.unload_library(ctx._lib)
 }

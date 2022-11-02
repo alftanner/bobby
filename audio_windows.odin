@@ -28,8 +28,6 @@ Sound_Output :: struct {
 sound_output: Sound_Output
 
 audio_init :: proc(winid: win32.HWND, samples_per_second, buffer_size: int) -> (ok: bool) {
-	if ds.__lib_handle != nil do return
-
 	direct_sound.init(&ds)
 	ids: direct_sound.LPDIRECTSOUND
 	if ds.DirectSoundCreate(nil, &ids, nil) != 0 do return
@@ -43,7 +41,9 @@ audio_init :: proc(winid: win32.HWND, samples_per_second, buffer_size: int) -> (
 	wave_format.nBlockAlign = (wave_format.nChannels * wave_format.wBitsPerSample) / 8
 	wave_format.nAvgBytesPerSec = wave_format.nSamplesPerSec * u32(wave_format.nBlockAlign)
 
-	if ids->SetCooperativeLevel(winid, direct_sound.DSSCL_PRIORITY) != 0 do return
+	if ids->SetCooperativeLevel(winid, direct_sound.DSSCL_PRIORITY) != 0 {
+		return
+	}
 
 	{
 		buffer_description: direct_sound.DSBUFFERDESC = {
@@ -52,8 +52,12 @@ audio_init :: proc(winid: win32.HWND, samples_per_second, buffer_size: int) -> (
 		}
 		primary_buffer: direct_sound.LPDIRECTSOUNDBUFFER
 
-		if ids->CreateSoundBuffer(&buffer_description, &primary_buffer, nil) != 0 do return
-		if primary_buffer->SetFormat(&wave_format) != 0 do return
+		if ids->CreateSoundBuffer(&buffer_description, &primary_buffer, nil) != 0 {
+			return
+		}
+		if primary_buffer->SetFormat(&wave_format) != 0 {
+			return
+		}
 	}
 
 	buffer_description: direct_sound.DSBUFFERDESC = {
@@ -63,7 +67,9 @@ audio_init :: proc(winid: win32.HWND, samples_per_second, buffer_size: int) -> (
 	}
 	buffer_description.lpwfxFormat = &wave_format
 
-	if ids->CreateSoundBuffer(&buffer_description, &sound_output.secondary_buffer, nil) != 0 do return
+	if ids->CreateSoundBuffer(&buffer_description, &sound_output.secondary_buffer, nil) != 0 {
+		return
+	}
 
 	return true
 }

@@ -13,7 +13,6 @@ import "core:os"
 import "core:mem"
 import "core:runtime"
 import "core:fmt"
-when ODIN_DEBUG do import "core:log"
 
 import swin "simple_window"
 
@@ -112,15 +111,18 @@ draw_text :: proc(canvas: ^swin.Texture2D, text: string, px, py: ^int) {
 }
 
 draw_stats :: proc(canvas: ^swin.Texture2D, vsync: bool) {
-	@static time_waited: time.Duration
-	@static lastu, lastf, fps, tps: Average_Calculator
+	@thread_local time_waited: time.Duration
+	@thread_local lastu, lastf, fps, tps: Average_Calculator
 
 	avg_add(&lastu, time.duration_milliseconds(sync.atomic_load(&world.tick_frame_time)))
 	avg_add(&lastf, time.duration_milliseconds(sync.atomic_load(&world.frame_time)))
 	avg_add(&tps, 1000/time.duration_milliseconds(sync.atomic_load(&world.tick_frame)))
 	avg_add(&fps, 1000/time.duration_milliseconds(sync.atomic_load(&world.frame)))
 
-	@static tick: time.Tick
+	// DEBUG: see every frame time individually
+	//fmt.println(1000/time.duration_milliseconds(sync.atomic_load(&world.frame)))
+
+	@thread_local tick: time.Tick
 	time_waited += time.tick_lap_time(&tick)
 	if time_waited >= 50 * time.Millisecond {
 		avg_calculate(&lastu)
@@ -143,11 +145,9 @@ draw_stats :: proc(canvas: ^swin.Texture2D, vsync: bool) {
 	draw_text(canvas, text, &x, &y)
 }
 
-render :: proc(data: rawptr) {
-	window := cast(^swin.Window)data
-
+render :: proc(window: ^swin.Window) {
 	client_w, client_h := get_client_size()
-	canvas := swin.texture_make(client_w, client_h, runtime.default_allocator())
+	canvas := swin.texture_make(client_w, client_h)
 
 	clear_color := swin.color(expand_to_tuple(window.clear_color), 0xff)
 
@@ -157,9 +157,8 @@ render :: proc(data: rawptr) {
 		client_w, client_h = get_client_size()
 		if client_w != canvas.w || client_h != canvas.h {
 			swin.texture_destroy(canvas)
-			canvas = swin.texture_make(client_w, client_h, runtime.default_allocator())
+			canvas = swin.texture_make(client_w, client_h)
 		}
-
 
 		if sync.atomic_load(&world.updated) {
 			sync.guard(&world.lock)
@@ -188,9 +187,7 @@ render :: proc(data: rawptr) {
 	}
 }
 
-world_update :: proc(data: rawptr) {
-	window := cast(^swin.Window)data
-
+update_world :: proc(window: ^swin.Window) {
 	LATENCY_FRAMES :: 3
 
 	sound_output = {
@@ -202,12 +199,11 @@ world_update :: proc(data: rawptr) {
 
 	if audio_init(window.id, sound_output.samples_per_second, sound_output.secondary_buffer_size) {
 		audio_start()
-		world.samples = make([]i16, sound_output.secondary_buffer_size, runtime.default_allocator())
+		world.samples = make([]i16, sound_output.secondary_buffer_size)
 		world.audio_present = true
 	}
 
 	// NOTE: doesn't run because the thread is terminated
-	// TODO: is not deiniting audio a problem?
 	// TODO: move audio into a separate thread anyway
 	defer if world.audio_present {
 		delete(world.samples)
@@ -246,11 +242,8 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 		}
 	case swin.Focus_Event:
 		if ev.focused {
-			settings.vsync = default_settings.vsync
-			settings.fps = default_settings.fps
 			settings.tps = default_settings.tps
 		} else {
-			settings.vsync = false
 			settings.tps = 5
 		}
 	case swin.Draw_Event:
@@ -298,9 +291,8 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 	}
 }
 
-run :: proc() {
-	// Load resources
-	{
+load_resources :: proc() {
+	{ // font atlas
 		img, err := image.load(#load("res/font.png"))
 		assert(err == nil, fmt.tprint(err))
 		defer image.destroy(img)
@@ -314,19 +306,13 @@ run :: proc() {
 			font.texture.pixels[i] = swin.color(expand_to_tuple(p))
 		}
 	}
-	defer swin.texture_destroy(font.texture)
 
 	font.table = make(map[rune]int)
 	for ch in ` 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ?'".,:;~!@#$^&_|\/%*+-=<>()[]{}` {
 		font.table[ch] = len(font.table)
 	}
-	defer delete(font.table)
 
-	if os.exists("settings.save") {
-		load_data("settings.save", &settings)
-	}
-
-	{ // load the main texture
+	{ // main atlas
 		img, err := image.load(#load("res/atlas.png"))
 		assert(err == nil, fmt.tprint(err))
 		defer image.destroy(img)
@@ -336,11 +322,26 @@ run :: proc() {
 		pixels := mem.slice_data_cast([]image.RGBA_Pixel, bytes.buffer_to_bytes(&img.pixels))
 		copy(world.atlas.pixels, pixels)
 	}
-	defer swin.texture_destroy(world.atlas)
+}
+
+free_resources :: proc() {
+	swin.texture_destroy(font.texture)
+	delete(font.table)
+	swin.texture_destroy(world.atlas)
+}
+
+_main :: proc() {
+	// Load resources
+	load_resources()
+	defer free_resources()
+
+	if os.exists("settings.save") {
+		load_data("settings.save", &settings)
+	}
 
 	// Open window
-	window, ok := swin.create(640, 480, "Miki's World: The Lost Tiara")
-	assert(ok, "Failed to create window")
+	window := swin.create(640, 480, "Miki's World: The Lost Tiara")
+	assert(window != nil, "Failed to create window")
 	defer swin.destroy(window)
 
 	{ // center the window
@@ -354,18 +355,18 @@ run :: proc() {
 
 	save_client_size(window.client.w, window.client.h)
 
-	update_thread := thread.create_and_start_with_data(window, world_update, default_context, .High)
+	update_thread := thread.create_and_start_with_poly_data(data = window, fn = update_world, priority = .High)
 	defer {
 		thread.terminate(update_thread, 0)
 		thread.destroy(update_thread)
 	}
 
-	render_thread := thread.create_and_start_with_data(window, render, default_context, .High)
+	render_thread := thread.create_and_start_with_poly_data(data = window, fn = render, priority = .High)
 	defer {
 		thread.terminate(render_thread, 0)
 		thread.destroy(render_thread)
 	}
 
-	swin.set_event_handler(event_handler, default_context)
+	swin.set_event_handler(window, event_handler)
 	swin.run(window)
 }

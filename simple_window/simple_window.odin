@@ -2,7 +2,6 @@ package simple_window
 
 import "core:runtime"
 import "core:image"
-//import "core:log"
 
 /*
 TODO:
@@ -52,39 +51,19 @@ Window :: struct {
 	flags:        Window_Flags,
 
 	// internal
+	event_handler: Event_Handler_Proc,
+	event_context: Maybe(runtime.Context),
 	using specific: Window_OS_Specific,
 }
 
-create :: proc(
-	w: int = -1, h: int = -1,
-	name: string = "Window",
-	flags: Window_Flags = {},
-) -> (window: ^Window, ok: bool) {
-	@static initialized: bool
-	if !initialized {
-		context.allocator = runtime.default_allocator()
-		thread_context.init_ctx = context
-		// NOTE: it is possible for event handler to be set before creating a window
-		if thread_context.event_handler == nil {
-			thread_context.event_handler = default_event_handler
-		}
+@private window_handle: Maybe(Window)
 
-		initialized = true
-	}
-
-	context = thread_context.init_ctx
-
-	if _, exists := window_handle.?; exists do return
-
-	window, ok = _create(name, w, h, flags)
-	if !ok do return
-
-	return
+create :: proc(w: int = -1, h: int = -1, name: string = "Window", flags: Window_Flags = {}) -> (window: ^Window) {
+	return _create(name, w, h, flags)
 }
 
 destroy :: proc(window: ^Window) {
 	_destroy(window)
-
 	window_handle = nil
 }
 
@@ -94,16 +73,11 @@ run :: proc(window: ^Window) {
 	}
 }
 
-set_event_handler :: proc(handler: Event_Handler_Proc, ctx: Maybe(runtime.Context) = nil) {
-	if handler != nil {
-		thread_context.event_handler = handler
-	} else {
-		thread_context.event_handler = default_event_handler
-	}
-	thread_context.event_ctx = ctx.? or_else runtime.default_context()
+set_event_handler :: proc(window: ^Window, handler: Event_Handler_Proc, event_context: Maybe(runtime.Context) = nil) {
+	window.event_handler = handler
+	window.event_context = event_context
 }
 
-// TODO: support multiple monitors
 get_working_area :: #force_inline proc() -> Rect { return _get_working_area() }
 
 move :: #force_inline proc(window: ^Window, x, y: int) { _move(window, x, y) }
@@ -114,12 +88,12 @@ set_resizable :: #force_inline proc(window: ^Window, resizable: bool) { _set_res
 
 set_min_size :: #force_inline proc(window: ^Window, w, h: int) {
 	window.min_w, window.min_h = w, h
-	_resize(window, window.client.w, window.client.h) // TODO: other platforms might work in a different way
+	_resize(window, window.client.w, window.client.h)
 }
 
 display_pixels :: #force_inline proc(window: ^Window, canvas: Texture2D, dest: Rect, clear := true) { _display_pixels(window, canvas, dest, clear) }
 
-set_clear_color :: proc(window: ^Window, color: image.RGB_Pixel) {
+set_clear_color :: proc "contextless" (window: ^Window, color: image.RGB_Pixel) {
 	window.clear_color = color
 	_set_clear_color(window, color)
 }

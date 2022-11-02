@@ -1,23 +1,28 @@
-//+build windows
 //+private
 package simple_window
 
-import win32 "core:sys/windows"
-import "core:thread"
 import "core:image"
+import "core:thread"
+import "core:runtime"
+import win32 "core:sys/windows"
 
 Window_OS_Specific :: struct {
-	id:             win32.HWND,
-	device_context: win32.HDC,
+	id: win32.HWND,
 }
 
-_create :: proc(title: string, w, h: int, flags: Window_Flags) -> (window: ^Window, ok: bool) {
+_create :: proc "contextless" (title: string, w, h: int, flags: Window_Flags) -> (window: ^Window) {
+	if _, exists := window_handle.?; exists do return
+
 	instance := cast(win32.HINSTANCE)win32.GetModuleHandleW(nil)
 	black_brush := cast(win32.HBRUSH)win32.GetStockObject(win32.BLACK_BRUSH)
 	icon := win32.LoadIconA(nil, win32.IDI_APPLICATION)
 	cursor := win32.LoadCursorA(nil, win32.IDC_ARROW)
 
-	window_title := win32.utf8_to_wstring(title)
+	window_title: win32.wstring
+	{
+		context = runtime.default_context()
+		window_title = win32.utf8_to_wstring(title)
+	}
 	class_style := win32.CS_OWNDC | win32.CS_HREDRAW | win32.CS_VREDRAW | win32.CS_DBLCLKS
 	window_style := win32.WS_VISIBLE | win32.WS_OVERLAPPEDWINDOW &~ win32.WS_THICKFRAME &~ win32.WS_MAXIMIZEBOX
 
@@ -55,8 +60,6 @@ _create :: proc(title: string, w, h: int, flags: Window_Flags) -> (window: ^Wind
 
 	if winid == nil do return
 
-	dc := win32.GetDC(winid)
-
 	// get decorations size
 	wr, cr: win32.RECT
 	point: win32.POINT
@@ -71,7 +74,6 @@ _create :: proc(title: string, w, h: int, flags: Window_Flags) -> (window: ^Wind
 	window_handle = Window{
 		specific = {
 			id = winid,
-			device_context = dc,
 		},
 		rect = {
 			cast(int)wr.left,
@@ -89,15 +91,14 @@ _create :: proc(title: string, w, h: int, flags: Window_Flags) -> (window: ^Wind
 		is_focused = is_focused,
 	}
 
-	window = &window_handle.?
+	window = &(window_handle.?)
 
 	set_clear_color(window, {0, 0, 0})
 
-	return window, true
+	return
 }
 
 _destroy :: proc(window: ^Window) {
-	win32.ReleaseDC(window.id, window.device_context)
 	win32.DestroyWindow(window.id)
 }
 
@@ -139,7 +140,7 @@ _set_resizable :: proc(window: ^Window, resizable: bool) {
 	win32.SetWindowLongPtrW(winid, win32.GWL_STYLE, cast(int)style)
 }
 
-_display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect, clear := true) {
+_display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect, clear: bool) {
 	bitmap_info: win32.BITMAPINFO = {
 		bmiHeader = {
 			biSize = size_of(win32.BITMAPINFOHEADER),
@@ -151,8 +152,11 @@ _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect, clear :=
 		},
 	}
 
+	dc := win32.GetDC(window.id)
+	defer win32.ReleaseDC(window.id, dc)
+
 	win32.StretchDIBits(
-		window.device_context,
+		dc,
 		cast(i32)dest.x, cast(i32)dest.y, cast(i32)dest.w, cast(i32)dest.h,
 		0, 0, cast(i32)canvas.w, cast(i32)canvas.h, raw_data(canvas.pixels),
 		&bitmap_info, win32.DIB_RGB_COLORS, win32.SRCCOPY,
@@ -167,19 +171,22 @@ _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect, clear :=
 		cw = i32(window.client.w)
 		ch = i32(window.client.h)
 
-		if dx > 0 do win32.PatBlt(window.device_context, 0, 0, dx, ch, win32.PATCOPY)
-		if dr < cw do win32.PatBlt(window.device_context, dr, 0, cw - dr, ch, win32.PATCOPY)
-		if dy > 0 do win32.PatBlt(window.device_context, dx, 0, dr - dx, dy, win32.PATCOPY)
-		if db < ch do win32.PatBlt(window.device_context, dx, db, dr - dx, ch - db, win32.PATCOPY)
+		if dx > 0 do win32.PatBlt(dc, 0, 0, dx, ch, win32.PATCOPY)
+		if dr < cw do win32.PatBlt(dc, dr, 0, cw - dr, ch, win32.PATCOPY)
+		if dy > 0 do win32.PatBlt(dc, dx, 0, dr - dx, dy, win32.PATCOPY)
+		if db < ch do win32.PatBlt(dc, dx, db, dr - dx, ch - db, win32.PATCOPY)
 	}
 }
 
-_set_clear_color :: #force_inline proc(window: ^Window, color: image.RGB_Pixel) {
-	original := win32.SelectObject(window.device_context, win32.GetStockObject(win32.DC_PEN))
-	defer win32.SelectObject(window.device_context, original)
+_set_clear_color :: #force_inline proc "contextless" (window: ^Window, color: image.RGB_Pixel) {
+	dc := win32.GetDC(window.id)
+	defer win32.ReleaseDC(window.id, dc)
 
-	win32.SelectObject(window.device_context, win32.GetStockObject(win32.DC_BRUSH))
-	win32.SetDCBrushColor(window.device_context, win32.RGB(expand_to_tuple(color)))
+	original := win32.SelectObject(dc, win32.GetStockObject(win32.DC_PEN))
+	defer win32.SelectObject(dc, original)
+
+	win32.SelectObject(dc, win32.GetStockObject(win32.DC_BRUSH))
+	win32.SetDCBrushColor(dc, win32.RGB(expand_to_tuple(color)))
 }
 
 _wait_vblank :: win32.DwmFlush
