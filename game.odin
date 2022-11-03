@@ -188,28 +188,6 @@ render :: proc(window: ^swin.Window) {
 }
 
 update_world :: proc(window: ^swin.Window) {
-	LATENCY_FRAMES :: 3
-
-	sound_output = {
-		samples_per_second = 48000,
-		bytes_per_sample = size_of(i16)*2,
-	}
-	sound_output.secondary_buffer_size = sound_output.samples_per_second * sound_output.bytes_per_sample
-	sound_output.latency_sample_count = (sound_output.samples_per_second / 15) * LATENCY_FRAMES
-
-	if audio_init(window.id, sound_output.samples_per_second, sound_output.secondary_buffer_size) {
-		audio_start()
-		world.samples = make([]i16, sound_output.secondary_buffer_size)
-		world.audio_present = true
-	}
-
-	// NOTE: doesn't run because the thread is terminated
-	// TODO: move audio into a separate thread anyway
-	defer if world.audio_present {
-		delete(world.samples)
-		audio_deinit()
-	}
-
 	for { // NOTE: 30 TPS is assumed
 		start_tick := time.tick_now()
 
@@ -218,12 +196,6 @@ update_world :: proc(window: ^swin.Window) {
 			// update world
 
 			sync.atomic_store(&world.updated, true)
-		}
-
-		world.tone_hz = 256 + (world.x_offset / 4)
-
-		if world.audio_present {
-			audio_play()
 		}
 
 		sync.atomic_store(&world.tick_frame_time, time.tick_since(start_tick))
