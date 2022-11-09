@@ -93,8 +93,6 @@ _create :: proc "contextless" (title: string, w, h: int, flags: Window_Flags) ->
 
 	window = &(window_handle.?)
 
-	set_clear_color(window, {0, 0, 0})
-
 	return
 }
 
@@ -140,7 +138,7 @@ _set_resizable :: proc(window: ^Window, resizable: bool) {
 	win32.SetWindowLongPtrW(winid, win32.GWL_STYLE, cast(int)style)
 }
 
-_display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect, clear: bool) {
+_display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect) {
 	bitmap_info: win32.BITMAPINFO = {
 		bmiHeader = {
 			biSize = size_of(win32.BITMAPINFOHEADER),
@@ -155,14 +153,10 @@ _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect, clear: b
 	dc := win32.GetDC(window.id)
 	defer win32.ReleaseDC(window.id, dc)
 
-	win32.StretchDIBits(
-		dc,
-		cast(i32)dest.x, cast(i32)dest.y, cast(i32)dest.w, cast(i32)dest.h,
-		0, 0, cast(i32)canvas.w, cast(i32)canvas.h, raw_data(canvas.pixels),
-		&bitmap_info, win32.DIB_RGB_COLORS, win32.SRCCOPY,
-	)
+	win32.SelectObject(dc, win32.GetStockObject(win32.DC_BRUSH))
+	win32.SetDCBrushColor(dc, win32.RGB(expand_to_tuple(window.clear_color)))
 
-	if clear {
+	{ // clear
 		dx, dy, dr, db, cw, ch: i32
 		dx = i32(dest.x)
 		dy = i32(dest.y)
@@ -176,17 +170,13 @@ _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect, clear: b
 		if dy > 0 do win32.PatBlt(dc, dx, 0, dr - dx, dy, win32.PATCOPY)
 		if db < ch do win32.PatBlt(dc, dx, db, dr - dx, ch - db, win32.PATCOPY)
 	}
-}
 
-_set_clear_color :: #force_inline proc "contextless" (window: ^Window, color: image.RGB_Pixel) {
-	dc := win32.GetDC(window.id)
-	defer win32.ReleaseDC(window.id, dc)
-
-	original := win32.SelectObject(dc, win32.GetStockObject(win32.DC_PEN))
-	defer win32.SelectObject(dc, original)
-
-	win32.SelectObject(dc, win32.GetStockObject(win32.DC_BRUSH))
-	win32.SetDCBrushColor(dc, win32.RGB(expand_to_tuple(color)))
+	win32.StretchDIBits(
+		dc,
+		cast(i32)dest.x, cast(i32)dest.y, cast(i32)dest.w, cast(i32)dest.h,
+		0, 0, cast(i32)canvas.w, cast(i32)canvas.h, raw_data(canvas.pixels),
+		&bitmap_info, win32.DIB_RGB_COLORS, win32.SRCCOPY,
+	)
 }
 
 _wait_vblank :: win32.DwmFlush

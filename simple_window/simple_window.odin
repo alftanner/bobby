@@ -32,6 +32,7 @@ Window_Mode :: enum {
 Window :: struct {
 	// can modify
 	must_close: bool,
+	clear_color: image.RGB_Pixel,
 
 	// read-only
 	using rect:           Rect,
@@ -43,7 +44,6 @@ Window :: struct {
 	is_focused:           bool,
 	is_mouse_inside:      bool,
 	mode:                 Window_Mode,
-	clear_color:          image.RGB_Pixel,
 
 	// read-only, not very useful
 	min_w, min_h: int,
@@ -91,12 +91,7 @@ set_min_size :: #force_inline proc(window: ^Window, w, h: int) {
 	_resize(window, window.client.w, window.client.h)
 }
 
-display_pixels :: #force_inline proc(window: ^Window, canvas: Texture2D, dest: Rect, clear := true) { _display_pixels(window, canvas, dest, clear) }
-
-set_clear_color :: proc "contextless" (window: ^Window, color: image.RGB_Pixel) {
-	window.clear_color = color
-	_set_clear_color(window, color)
-}
+display_pixels :: #force_inline proc(window: ^Window, canvas: Texture2D, dest: Rect) { _display_pixels(window, canvas, dest) }
 
 // TODO: bug
 // wait_vblank :: _wait_vblank

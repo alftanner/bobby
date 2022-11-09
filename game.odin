@@ -40,31 +40,44 @@ default_settings: Settings = {
 }
 settings: Settings = default_settings
 
-World :: struct {
-	client_size: i64, // stores 2 i32 values
-	// TODO: i128 with atomic_load/store
+Pos :: struct {
+	using pos: [2]f32,
+	prev: [2]f32,
+}
 
+Player :: struct {
+	using position: Pos,
+	is_dead: bool,
+}
+
+World :: struct {
 	updated: bool,
-	frame_time, frame: time.Duration,
-	tick_frame_time, tick_frame: time.Duration,
 	lock: sync.Mutex,
 	atlas: swin.Texture2D,
 
-	tone_hz: f32,
-	x_offset: f32,
-
-	audio_present: bool,
-	samples: []i16,
+	player: Player,
 }
 world: World
 
+State :: struct {
+	// TODO: i128 with atomic_load/store
+	client_size: i64, // stores 2 i32 values
+
+	// _work shows how much time was spent on actual work in that frame before sleep
+	// _time shows total time of the frame, sleep included
+	frame_work, frame_time: time.Duration,
+	tick_work, tick_time: time.Duration,
+	previous_tick: time.Tick,
+}
+global_state: State
+
 save_client_size :: #force_inline proc(width, height: int) {
-	sync.atomic_store(&world.client_size, transmute(i64)[2]i32{i32(width), i32(height)})
+	sync.atomic_store(&global_state.client_size, transmute(i64)[2]i32{i32(width), i32(height)})
 }
 
 get_client_size :: #force_inline proc() -> (int, int) {
-	client_size := transmute([2]i32)sync.atomic_load(&world.client_size)
-	return int(client_size[0]), int(client_size[1])
+	size := transmute([2]i32)sync.atomic_load(&global_state.client_size)
+	return int(size[0]), int(size[1])
 }
 
 limit_frame :: proc(frame_time: time.Duration, frame_limit: int, accurate := true) {
@@ -110,17 +123,17 @@ draw_text :: proc(canvas: ^swin.Texture2D, text: string, px, py: ^int) {
 	}
 }
 
-draw_stats :: proc(canvas: ^swin.Texture2D, vsync: bool) {
+draw_stats :: proc(canvas: ^swin.Texture2D) {
 	@thread_local time_waited: time.Duration
 	@thread_local lastu, lastf, fps, tps: Average_Calculator
 
-	avg_add(&lastu, time.duration_milliseconds(sync.atomic_load(&world.tick_frame_time)))
-	avg_add(&lastf, time.duration_milliseconds(sync.atomic_load(&world.frame_time)))
-	avg_add(&tps, 1000/time.duration_milliseconds(sync.atomic_load(&world.tick_frame)))
-	avg_add(&fps, 1000/time.duration_milliseconds(sync.atomic_load(&world.frame)))
+	avg_add(&lastu, time.duration_milliseconds(sync.atomic_load(&global_state.tick_work)))
+	avg_add(&lastf, time.duration_milliseconds(sync.atomic_load(&global_state.frame_work)))
+	avg_add(&tps, 1000/time.duration_milliseconds(sync.atomic_load(&global_state.tick_time)))
+	avg_add(&fps, 1000/time.duration_milliseconds(sync.atomic_load(&global_state.frame_time)))
 
 	// DEBUG: see every frame time individually
-	//fmt.println(1000/time.duration_milliseconds(sync.atomic_load(&world.frame)))
+	//fmt.println(1000/time.duration_milliseconds(sync.atomic_load(&global_state.frame_time)))
 
 	@thread_local tick: time.Tick
 	time_waited += time.tick_lap_time(&tick)
@@ -138,14 +151,24 @@ draw_stats :: proc(canvas: ^swin.Texture2D, vsync: bool) {
 		tbuf[:],
 `{}FPS{} {}ms last
 {}TPS {}ms last`,
-		u32(math.round(fps.average)), " (VSYNC)" if vsync else "", lastf.average,
+		u32(math.round(fps.average)), " (VSYNC)" if settings.vsync else "", lastf.average,
 		u32(math.round(tps.average)), lastu.average,
 	)
 
 	draw_text(canvas, text, &x, &y)
 }
 
+interpolate_position :: #force_inline proc (frame_pos, frame_len: time.Duration, pos: Pos) -> [2]f32 {
+	ix := pos.prev.x + f32(frame_pos) * ((pos.x - pos.prev.x)/f32(frame_len))
+	iy := pos.prev.y + f32(frame_pos) * ((pos.y - pos.prev.y)/f32(frame_len))
+	return {ix, iy}
+}
+
 render :: proc(window: ^swin.Window) {
+	previous_tick: time.Tick
+	tick_time: time.Duration
+	draw_player := world.player
+
 	client_w, client_h := get_client_size()
 	canvas := swin.texture_make(client_w, client_h)
 
@@ -162,28 +185,34 @@ render :: proc(window: ^swin.Window) {
 
 		if sync.atomic_load(&world.updated) {
 			sync.guard(&world.lock)
-			// TODO: collect needed info from the world update
+
+			draw_player = world.player
+			previous_tick = global_state.previous_tick
+			tick_time = sync.atomic_load(&global_state.tick_time)
+
 			sync.atomic_store(&world.updated, false)
 		}
 
 		slice.fill(canvas.pixels, clear_color)
-		// TODO: draw the world, interpolate if necessary
-
-		vsync := settings.vsync
-		if settings.show_stats {
-			draw_stats(&canvas, vsync)
+		{
+			player_pos := interpolate_position(time.tick_diff(previous_tick, time.tick_now()), tick_time, draw_player.position)
+			swin.draw_rect(&canvas, {int(player_pos.x), int(player_pos.y), 10, 10}, swin.WHITE)
 		}
 
-		sync.atomic_store(&world.frame_time, time.tick_since(start_tick))
+		if settings.show_stats {
+			draw_stats(&canvas)
+		}
 
-		if vsync {
+		sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
+
+		if settings.vsync {
 			swin.wait_vblank()
 		} else {
 			limit_frame(time.tick_since(start_tick), settings.fps)
 		}
 		swin.display_pixels(window, canvas, {0, 0, canvas.w, canvas.h})
 
-		sync.atomic_store(&world.frame, time.tick_since(start_tick))
+		sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 	}
 }
 
@@ -193,16 +222,32 @@ update_world :: proc(window: ^swin.Window) {
 
 		{
 			sync.guard(&world.lock)
-			// update world
 
+			SPEED :: 5
+
+			world.player.position.prev = world.player.position.pos
+			if window.is_key_down[.Right] {
+				world.player.x += SPEED
+			}
+			if window.is_key_down[.Left] {
+				world.player.x -= SPEED
+			}
+			if window.is_key_down[.Down] {
+				world.player.y += SPEED
+			}
+			if window.is_key_down[.Up] {
+				world.player.y -= SPEED
+			}
+
+			global_state.previous_tick = time.tick_now()
 			sync.atomic_store(&world.updated, true)
 		}
 
-		sync.atomic_store(&world.tick_frame_time, time.tick_since(start_tick))
+		sync.atomic_store(&global_state.tick_work, time.tick_since(start_tick))
 
-		limit_frame(time.tick_since(start_tick), settings.tps, false) // NOTE: not using accurate timer for 30 TPS, maybe I should?
+		limit_frame(time.tick_since(start_tick), settings.tps, false) // NOTE: not using accurate timer for 30 TPS, should I?
 
-		sync.atomic_store(&world.tick_frame, time.tick_since(start_tick))
+		sync.atomic_store(&global_state.tick_time, time.tick_since(start_tick))
 	}
 }
 
@@ -216,7 +261,7 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 		if ev.focused {
 			settings.tps = default_settings.tps
 		} else {
-			settings.tps = 5
+			settings.tps = 3
 		}
 	case swin.Draw_Event:
 	case swin.Resize_Event:
@@ -252,9 +297,6 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 				save_data("settings.save", &settings)
 			case .B:
 				settings = default_settings
-			case .Space: // jump
-				//sync.guard(&world.lock)
-				//world.player.should_jump = true
 			}
 		}
 	case swin.Mouse_Button_Event:
@@ -321,7 +363,7 @@ _main :: proc() {
 		swin.move(window, wr.x + (wr.w/2 - window.w/2), wr.y + (wr.h/2 - window.h/2))
 	}
 
-	swin.set_clear_color(window, swin.BLUE.rgb)
+	window.clear_color = swin.BLUE.rgb
 	swin.set_resizable(window, true)
 	swin.set_min_size(window, 640, 480)
 
