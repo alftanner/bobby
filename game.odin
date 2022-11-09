@@ -25,6 +25,13 @@ Font :: struct {
 }
 font: Font
 
+Direction :: enum {
+	Right,
+	Left,
+	Up,
+	Down,
+}
+
 // since settings will be saved to the file, they probably should be packed
 Settings :: struct #packed {
 	fps, tps: int,
@@ -186,6 +193,7 @@ render :: proc(window: ^swin.Window) {
 		if sync.atomic_load(&world.updated) {
 			sync.guard(&world.lock)
 
+			// save the world state
 			draw_player = world.player
 			previous_tick = global_state.previous_tick
 			tick_time = sync.atomic_load(&global_state.tick_time)
@@ -194,7 +202,8 @@ render :: proc(window: ^swin.Window) {
 		}
 
 		slice.fill(canvas.pixels, clear_color)
-		{
+
+		{ // draw the world
 			player_pos := interpolate_position(time.tick_diff(previous_tick, time.tick_now()), tick_time, draw_player.position)
 			swin.draw_rect(&canvas, {int(player_pos.x), int(player_pos.y), 10, 10}, swin.WHITE)
 		}
@@ -216,6 +225,21 @@ render :: proc(window: ^swin.Window) {
 	}
 }
 
+move_player :: proc(d: Direction) {
+	SPEED :: 5
+
+	switch d {
+	case .Right:
+		world.player.x += SPEED
+	case .Left:
+		world.player.x -= SPEED
+	case .Down:
+		world.player.y += SPEED
+	case .Up:
+		world.player.y -= SPEED
+	}
+}
+
 update_world :: proc(window: ^swin.Window) {
 	for { // NOTE: 30 TPS is assumed
 		start_tick := time.tick_now()
@@ -223,21 +247,12 @@ update_world :: proc(window: ^swin.Window) {
 		{
 			sync.guard(&world.lock)
 
-			SPEED :: 5
-
+			// TODO: if the game is lagging and/or TPS is too low the keys are not being registered between frames
 			world.player.position.prev = world.player.position.pos
-			if window.is_key_down[.Right] {
-				world.player.x += SPEED
-			}
-			if window.is_key_down[.Left] {
-				world.player.x -= SPEED
-			}
-			if window.is_key_down[.Down] {
-				world.player.y += SPEED
-			}
-			if window.is_key_down[.Up] {
-				world.player.y -= SPEED
-			}
+			if window.is_key_down[.Right] do move_player(.Right)
+			if window.is_key_down[.Left] do move_player(.Left)
+			if window.is_key_down[.Down] do move_player(.Down)
+			if window.is_key_down[.Up] do move_player(.Up)
 
 			global_state.previous_tick = time.tick_now()
 			sync.atomic_store(&world.updated, true)
