@@ -138,4 +138,9 @@ Key_Code :: enum {
 	LaunchMediaSelect,
 	LaunchApp1,
 	LaunchApp2,
+	UNDEFINED_123,
+	UNDEFINED_124,
+	UNDEFINED_125,
+	UNDEFINED_126,
+	UNDEFINED_127,
 }

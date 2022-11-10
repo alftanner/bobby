@@ -12,6 +12,7 @@ import "core:bytes"
 import "core:os"
 import "core:mem"
 import "core:runtime"
+import "core:container/small_array"
 import "core:fmt"
 
 import swin "simple_window"
@@ -77,6 +78,11 @@ State :: struct {
 	previous_tick: time.Tick,
 }
 global_state: State
+
+// NOTE: this data structure assumes 2 presses in a row are not possible
+Key_Queue :: small_array.Small_Array(20, bool) // probably no human can press and release the same button more than 20 times a second
+key_data: [swin.Key_Code]Key_Queue
+key_data_lock: sync.Mutex
 
 save_client_size :: #force_inline proc(width, height: int) {
 	sync.atomic_store(&global_state.client_size, transmute(i64)[2]i32{i32(width), i32(height)})
@@ -247,12 +253,34 @@ update_world :: proc(window: ^swin.Window) {
 		{
 			sync.guard(&world.lock)
 
-			// TODO: if the game is lagging and/or TPS is too low the keys are not being registered between frames
 			world.player.position.prev = world.player.position.pos
-			if window.is_key_down[.Right] do move_player(.Right)
-			if window.is_key_down[.Left] do move_player(.Left)
-			if window.is_key_down[.Down] do move_player(.Down)
-			if window.is_key_down[.Up] do move_player(.Up)
+			{ // process inputs
+				sync.guard(&key_data_lock)
+				for states, key in &key_data {
+					for idx := 0; idx < states.len; idx += 1 {
+						// released
+						if !states.data[idx] {
+							// pop it
+							small_array.pop_front(&states)
+							idx -= 1
+
+							// if release was first in the stack, that means press was not recorded, just skip
+							if idx < 0 do continue
+
+							// if release was not first, then pop press also
+							small_array.pop_front(&states)
+							idx -= 1
+							continue
+						}
+
+						// pressed
+						if key == .Right do move_player(.Right)
+						if key == .Left do move_player(.Left)
+						if key == .Down do move_player(.Down)
+						if key == .Up do move_player(.Up)
+					}
+				}
+			}
 
 			global_state.previous_tick = time.tick_now()
 			sync.atomic_store(&world.updated, true)
@@ -313,6 +341,11 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 			case .B:
 				settings = default_settings
 			}
+		}
+
+		if ev.state == .Released || ev.state == .Pressed {
+			sync.guard(&key_data_lock)
+			small_array.push_back(&key_data[ev.key], ev.state == .Pressed)
 		}
 	case swin.Mouse_Button_Event:
 	case swin.Mouse_Move_Event:
