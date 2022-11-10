@@ -231,19 +231,44 @@ render :: proc(window: ^swin.Window) {
 	}
 }
 
-move_player :: proc(d: Direction) {
+// NOTE: this input processor squashes multiple key presses in-between frames into a single keypress
+process_inputs :: proc(handler: proc(swin.Key_Code)) {
+	sync.guard(&key_data_lock)
+	for states, key in &key_data do for idx := 0; idx < states.len; idx += 1 {
+		// released
+		if !states.data[idx] {
+			// pop it
+			small_array.pop_front(&states)
+			idx -= 1
+
+			// if release was first in the stack, that means press was not recorded, just skip
+			if idx < 0 do continue
+
+			// if release was not first, then pop it
+			small_array.pop_front(&states)
+			idx -= 1
+
+			// key pressed
+			if states.len == 0 {
+				handler(key)
+			}
+			continue
+		}
+
+		// key held
+		if states.len == 1 {
+			handler(key)
+		}
+	}
+}
+
+input_handler :: proc(key: swin.Key_Code) {
 	SPEED :: 5
 
-	switch d {
-	case .Right:
-		world.player.x += SPEED
-	case .Left:
-		world.player.x -= SPEED
-	case .Down:
-		world.player.y += SPEED
-	case .Up:
-		world.player.y -= SPEED
-	}
+	if key == .Right do world.player.x += SPEED
+	if key == .Left do world.player.x -= SPEED
+	if key == .Down do world.player.y += SPEED
+	if key == .Up do world.player.y -= SPEED
 }
 
 update_world :: proc(window: ^swin.Window) {
@@ -254,33 +279,7 @@ update_world :: proc(window: ^swin.Window) {
 			sync.guard(&world.lock)
 
 			world.player.position.prev = world.player.position.pos
-			{ // process inputs
-				sync.guard(&key_data_lock)
-				for states, key in &key_data {
-					for idx := 0; idx < states.len; idx += 1 {
-						// released
-						if !states.data[idx] {
-							// pop it
-							small_array.pop_front(&states)
-							idx -= 1
-
-							// if release was first in the stack, that means press was not recorded, just skip
-							if idx < 0 do continue
-
-							// if release was not first, then pop press also
-							small_array.pop_front(&states)
-							idx -= 1
-							continue
-						}
-
-						// pressed
-						if key == .Right do move_player(.Right)
-						if key == .Left do move_player(.Left)
-						if key == .Down do move_player(.Down)
-						if key == .Up do move_player(.Up)
-					}
-				}
-			}
+			process_inputs(input_handler)
 
 			global_state.previous_tick = time.tick_now()
 			sync.atomic_store(&world.updated, true)
