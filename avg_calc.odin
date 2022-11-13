@@ -1,4 +1,4 @@
-package miki
+package main
 
 Average_Calculator :: struct {
 	accumulator, count, average: f64,

@@ -1,4 +1,4 @@
-package miki
+package main
 
 import "core:os"
 import "core:mem"

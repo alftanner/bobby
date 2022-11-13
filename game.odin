@@ -1,4 +1,4 @@
-package miki
+package main
 
 import "core:time"
 import "core:thread"
@@ -12,12 +12,12 @@ import "core:bytes"
 import "core:os"
 import "core:mem"
 import "core:runtime"
-import "core:container/small_array"
 import "core:fmt"
 
 import swin "simple_window"
 
 SKY_BLUE: image.RGBA_Pixel : {139, 216, 245, 255}
+GAME_TITLE :: "Bobby Carrot Classic"
 
 GLYPH_W, GLYPH_H :: 5, 7
 Font :: struct {
@@ -70,27 +70,25 @@ world: World
 State :: struct {
 	// TODO: i128 with atomic_load/store
 	client_size: i64, // stores 2 i32 values
+	mouse_pos: i64,
 
 	// _work shows how much time was spent on actual work in that frame before sleep
 	// _time shows total time of the frame, sleep included
 	frame_work, frame_time: time.Duration,
 	tick_work, tick_time: time.Duration,
 	previous_tick: time.Tick,
+
+	key_data: [swin.Key_Code]u8, // 0 - not pressed, 1 - pressed, 2 - released
+	key_data_lock: sync.Mutex,
 }
 global_state: State
 
-// NOTE: this data structure assumes 2 presses in a row are not possible
-Key_Queue :: small_array.Small_Array(20, bool) // probably no human can press and release the same button more than 20 times a second
-key_data: [swin.Key_Code]Key_Queue
-key_data_lock: sync.Mutex
-
-save_client_size :: #force_inline proc(width, height: int) {
-	sync.atomic_store(&global_state.client_size, transmute(i64)[2]i32{i32(width), i32(height)})
+save_2_values :: #force_inline proc(p: ^i64, a, b: i32) {
+	sync.atomic_store(p, transmute(i64)[2]i32{a, b})
 }
 
-get_client_size :: #force_inline proc() -> (int, int) {
-	size := transmute([2]i32)sync.atomic_load(&global_state.client_size)
-	return int(size[0]), int(size[1])
+get_2_values :: #force_inline proc(p: ^i64) -> (i32, i32) {
+	return expand_to_tuple(transmute([2]i32)sync.atomic_load(p))
 }
 
 limit_frame :: proc(frame_time: time.Duration, frame_limit: int, accurate := true) {
@@ -182,18 +180,18 @@ render :: proc(window: ^swin.Window) {
 	tick_time: time.Duration
 	draw_player := world.player
 
-	client_w, client_h := get_client_size()
-	canvas := swin.texture_make(client_w, client_h)
+	client_w, client_h := get_2_values(&global_state.client_size)
+	canvas := swin.texture_make(int(client_w), int(client_h))
 
 	clear_color := swin.color(expand_to_tuple(window.clear_color), 0xff)
 
 	for {
 		start_tick := time.tick_now()
 
-		client_w, client_h = get_client_size()
-		if client_w != canvas.w || client_h != canvas.h {
+		client_w, client_h = get_2_values(&global_state.client_size)
+		if int(client_w) != canvas.w || int(client_h) != canvas.h {
 			swin.texture_destroy(canvas)
-			canvas = swin.texture_make(client_w, client_h)
+			canvas = swin.texture_make(int(client_w), int(client_h))
 		}
 
 		if sync.atomic_load(&world.updated) {
@@ -211,7 +209,7 @@ render :: proc(window: ^swin.Window) {
 
 		{ // draw the world
 			player_pos := interpolate_position(time.tick_diff(previous_tick, time.tick_now()), tick_time, draw_player.position)
-			swin.draw_rect(&canvas, {int(player_pos.x), int(player_pos.y), 10, 10}, swin.WHITE)
+			swin.draw_rect(&canvas, {int(player_pos.x)-5, int(player_pos.y)-5, 10, 10}, swin.WHITE)
 		}
 
 		if settings.show_stats {
@@ -231,44 +229,15 @@ render :: proc(window: ^swin.Window) {
 	}
 }
 
-// NOTE: this input processor squashes multiple key presses in-between frames into a single keypress
-process_inputs :: proc(handler: proc(swin.Key_Code)) {
-	sync.guard(&key_data_lock)
-	for states, key in &key_data do for idx := 0; idx < states.len; idx += 1 {
-		// released
-		if !states.data[idx] {
-			// pop it
-			small_array.pop_front(&states)
-			idx -= 1
-
-			// if release was first in the stack, that means press was not recorded, just skip
-			if idx < 0 do continue
-
-			// if release was not first, then pop it
-			small_array.pop_front(&states)
-			idx -= 1
-
-			// key pressed
-			if states.len == 0 {
-				handler(key)
-			}
-			continue
-		}
-
-		// key held
-		if states.len == 1 {
-			handler(key)
-		}
-	}
-}
-
-input_handler :: proc(key: swin.Key_Code) {
+keyboard_handler :: proc(key: swin.Key_Code) {
+/*
 	SPEED :: 5
 
 	if key == .Right do world.player.x += SPEED
 	if key == .Left do world.player.x -= SPEED
 	if key == .Down do world.player.y += SPEED
 	if key == .Up do world.player.y -= SPEED
+*/
 }
 
 update_world :: proc(window: ^swin.Window) {
@@ -279,7 +248,21 @@ update_world :: proc(window: ^swin.Window) {
 			sync.guard(&world.lock)
 
 			world.player.position.prev = world.player.position.pos
-			process_inputs(input_handler)
+			{ // keyboard inputs
+				// NOTE: this input processor squashes multiple key presses in-between frames into a single keypress
+				sync.guard(&global_state.key_data_lock)
+				for data, key in &global_state.key_data {
+					if data == 0 do continue
+
+					keyboard_handler(key)
+					if data == 2 do data = 0
+				}
+			}
+			{ // mouse inputs
+				x, y := get_2_values(&global_state.mouse_pos)
+				if x >= 0 do world.player.x = f32(x)
+				if y >= 0 do world.player.y = f32(y)
+			}
 
 			global_state.previous_tick = time.tick_now()
 			sync.atomic_store(&world.updated, true)
@@ -296,7 +279,7 @@ update_world :: proc(window: ^swin.Window) {
 event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 	switch ev in event {
 	case swin.Close_Event:
-		if swin.show_message_box(.OkCancel, "miki game", "Do you really want to quit?", window) == .Cancel {
+		if swin.show_message_box(.OkCancel, GAME_TITLE, "Do you really want to quit?", window) == .Cancel {
 			window.must_close = false
 		}
 	case swin.Focus_Event:
@@ -307,7 +290,7 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 		}
 	case swin.Draw_Event:
 	case swin.Resize_Event:
-		save_client_size(window.client.w, window.client.h)
+		save_2_values(&global_state.client_size, i32(window.client.w), i32(window.client.h))
 	case swin.Move_Event:
 	case swin.Character_Event:
 	case swin.Keyboard_Event:
@@ -315,39 +298,28 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 		case .Repeat, .Released:
 		case .Pressed:
 			#partial switch ev.key {
-			case .Q, .Escape:
-				window.must_close = true
-			case .V:
-				settings.vsync = !settings.vsync
-			case .Num0:
-				settings.fps = 0
-			case .Num1:
-				settings.fps = 10
-			case .Num2:
-				settings.fps = 200
-			case .Num3:
-				settings.fps = 30
-			case .Num4:
-				settings.fps = 144
-			case .Num6:
-				settings.fps = 60
-			case .F:
-				settings.show_stats = !settings.show_stats
-			case .H:
-				settings.show_hitboxes = !settings.show_hitboxes
-			case .N:
-				save_data("settings.save", &settings)
-			case .B:
-				settings = default_settings
+			case .Q, .Escape: window.must_close = true
+			case .V: settings.vsync = !settings.vsync
+			case .F: settings.show_stats = !settings.show_stats
+			case .H: settings.show_hitboxes = !settings.show_hitboxes
+			case .N: save_data("settings.save", &settings)
+			case .B: settings = default_settings
+			case .Num0: settings.fps = 0
+			case .Num1: settings.fps = 10
+			case .Num2: settings.fps = 200
+			case .Num3: settings.fps = 30
+			case .Num4: settings.fps = 144
+			case .Num6: settings.fps = 60
 			}
 		}
 
 		if ev.state == .Released || ev.state == .Pressed {
-			sync.guard(&key_data_lock)
-			small_array.push_back(&key_data[ev.key], ev.state == .Pressed)
+			sync.guard(&global_state.key_data_lock)
+			global_state.key_data[ev.key] = 1 if ev.state == .Pressed else 2
 		}
 	case swin.Mouse_Button_Event:
 	case swin.Mouse_Move_Event:
+		save_2_values(&global_state.mouse_pos, ev.x, ev.y)
 	case swin.Mouse_Wheel_Event:
 	}
 }
@@ -392,7 +364,6 @@ free_resources :: proc() {
 }
 
 _main :: proc() {
-	// Load resources
 	load_resources()
 	defer free_resources()
 
@@ -401,7 +372,7 @@ _main :: proc() {
 	}
 
 	// Open window
-	window := swin.create(640, 480, "Miki's World: The Lost Tiara")
+	window := swin.create(640, 480, GAME_TITLE)
 	assert(window != nil, "Failed to create window")
 	defer swin.destroy(window)
 
@@ -414,7 +385,7 @@ _main :: proc() {
 	swin.set_resizable(window, true)
 	swin.set_min_size(window, 640, 480)
 
-	save_client_size(window.client.w, window.client.h)
+	save_2_values(&global_state.client_size, i32(window.client.w), i32(window.client.h))
 
 	update_thread := thread.create_and_start_with_poly_data(data = window, fn = update_world, priority = .High)
 	defer {

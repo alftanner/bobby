@@ -11,9 +11,7 @@ minimize()
 */
 
 Window_Flag :: enum {
-	// No automatic canvas management
-	NoCanvas,
-	// TODO: Maximized, Minimized, Hidden(?), Fullscreen, Borderless(?), InputGrabbed(?)
+	// TODO: Maximized, Minimized, Hidden(?), Fullscreen, Borderless(?)
 }
 Window_Flags :: distinct bit_set[Window_Flag; u8]
 
