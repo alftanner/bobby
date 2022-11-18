@@ -10,8 +10,13 @@ Window_OS_Specific :: struct {
 	id: win32.HWND,
 }
 
-_create :: proc "contextless" (title: string, w, h: int, flags: Window_Flags) -> (window: ^Window) {
-	if _, exists := window_handle.?; exists do return
+// need to store pointer to the window for _default_window_proc
+@private window_handle: ^Window
+
+_create :: proc "contextless" (window: ^Window, w, h: int, title: string, flags: Window_Flags) -> bool {
+	if window_handle != nil {
+		return false
+	}
 
 	instance := cast(win32.HINSTANCE)win32.GetModuleHandleW(nil)
 	black_brush := cast(win32.HBRUSH)win32.GetStockObject(win32.BLACK_BRUSH)
@@ -58,7 +63,9 @@ _create :: proc "contextless" (title: string, w, h: int, flags: Window_Flags) ->
 		hWndParent = nil, hMenu = nil, hInstance = instance,
 	)
 
-	if winid == nil do return
+	if winid == nil {
+		return false
+	}
 
 	// get decorations size
 	wr, cr: win32.RECT
@@ -71,7 +78,7 @@ _create :: proc "contextless" (title: string, w, h: int, flags: Window_Flags) ->
 	is_focused := win32.GetForegroundWindow() == winid
 	win32.PostMessageW(winid, win32.WM_NCACTIVATE, cast(uintptr)is_focused, 0)
 
-	window_handle = Window{
+	window^ = {
 		specific = {
 			id = winid,
 		},
@@ -91,13 +98,14 @@ _create :: proc "contextless" (title: string, w, h: int, flags: Window_Flags) ->
 		is_focused = is_focused,
 	}
 
-	window = &(window_handle.?)
+	window_handle = window
 
-	return
+	return true
 }
 
 _destroy :: proc(window: ^Window) {
 	win32.DestroyWindow(window.id)
+	window_handle = nil
 }
 
 _get_working_area :: #force_inline proc() -> Rect {

@@ -28,16 +28,16 @@ Texture2D :: struct {
 	allocator: mem.Allocator,
 }
 
-texture_make :: proc(w, h: int, allocator := context.allocator) -> (t2d: Texture2D) {
-	t2d.w = w
-	t2d.h = h
-	t2d.allocator = allocator
-	t2d.pixels = make([]Color, t2d.w * t2d.h, t2d.allocator)
+texture_make :: proc(w, h: int, allocator := context.allocator) -> (t: Texture2D) {
+	t.w = w
+	t.h = h
+	t.allocator = allocator
+	t.pixels = make([]Color, t.w * t.h, t.allocator)
 	return
 }
 
-texture_destroy :: proc(t2d: Texture2D) {
-	delete(t2d.pixels, t2d.allocator)
+texture_destroy :: proc(t: Texture2D) {
+	delete(t.pixels, t.allocator)
 }
 
 color :: proc(r, g, b, a: u8) -> Color {

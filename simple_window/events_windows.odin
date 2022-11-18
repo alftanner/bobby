@@ -13,13 +13,12 @@ _next_event :: proc(window: ^Window) {
 }
 
 _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wparam: win32.WPARAM, lparam: win32.LPARAM) -> (result: win32.LRESULT) {
-	window, ok := &window_handle.?
-	if !ok {
+	if window_handle == nil {
 		return win32.DefWindowProcW(winid, msg, wparam, lparam)
 	}
 
+	window := window_handle
 	ev: Event
-
 	switch msg {
 	case win32.WM_INPUTLANGCHANGE:
 		context = runtime.default_context()
