@@ -226,6 +226,19 @@ grass_sprites: map[bit_set[Direction]]Sprites = {
 	{.Down, .Up, .Right, .Left} = .Grass_Down_Up_Right_Left,
 	{.Down, .Up}                = .Grass_Down_Up,
 	{.Right, .Left}             = .Grass_Right_Left,
+	{.Down, .Up, .Right}        = .Grass_Down_Up,
+	{.Down, .Up, .Left}         = .Grass_Down_Up,
+	{.Right, .Left, .Down}      = .Grass_Right_Left,
+	{.Right, .Left, .Up}        = .Grass_Right_Left,
+}
+
+fence_sprites: map[bit_set[Direction]]Sprites = {
+	{.Right, .Left} = .Fence_Right_Left,
+	{.Down}         = .Fence_Down,
+	{.Right, .Down} = .Fence_Right_Down,
+	{.Left, .Down}  = .Fence_Left_Down,
+	{.Right}        = .Fence_Right,
+	{.Left}         = .Fence_Left,
 }
 
 idling_animation := [?]Sprite {
@@ -533,10 +546,25 @@ render :: proc(window: ^swin.Window) {
 			}
 
 			for tile, idx in level.tiles {
+				x := idx%level.w
+				y := idx/level.w
 				sprite: Sprite = sprites[.Ground]
+
 				#partial switch tile {
-				case .Grass: sprite = sprites[.Grass] // TODO: grass generation
-				case .Fence: sprite = sprites[.Fence_Right] // TODO: fence generation
+				case .Grass:
+					d: bit_set[Direction]
+					if get_level_tile({x - 1, y}) != .Grass do d += {.Left}
+					if get_level_tile({x + 1, y}) != .Grass do d += {.Right}
+					if get_level_tile({x, y - 1}) != .Grass do d += {.Up}
+					if get_level_tile({x, y + 1}) != .Grass do d += {.Down}
+					sprite = sprites[grass_sprites[d] or_else .Grass]
+				case .Fence:
+					d: bit_set[Direction]
+					if get_level_tile({x - 1, y}) == .Fence do d += {.Left}
+					if get_level_tile({x + 1, y}) == .Fence do d += {.Right}
+					//if get_level_tile({x, y - 1}) == .Fence do d += {.Up}
+					if get_level_tile({x, y + 1}) == .Fence do d += {.Down}
+					sprite = sprites[fence_sprites[d] or_else .Fence_Right]
 				case .End:
 					if world.level.end.state {
 						sprite = end_animation[world.level.end.frame]
@@ -549,9 +577,6 @@ render :: proc(window: ^swin.Window) {
 				case .Trap: sprite = sprites[.Trap]
 				case .Trap_Activated: sprite = sprites[.Trap_Activated]
 				}
-
-				x := idx%level.w
-				y := idx/level.w
 
 				px := offset_around_level.x - offset_into_level.x + f32(x)
 				py := offset_around_level.y - offset_into_level.y + f32(y)
@@ -610,10 +635,18 @@ move_player :: #force_inline proc(d: Direction) {
 }
 
 get_level_tile :: #force_inline proc(pos: [2]int) -> Tiles {
+	if pos.y < 0 || pos.y >= world.level.h || pos.x < 0 || pos.x >= world.level.w {
+		return .Grass
+	}
+
 	return world.level.tiles[(pos.y * world.level.w) + pos.x]
 }
 
 set_level_tile :: #force_inline proc(pos: [2]int, t: Tiles) {
+	if pos.y < 0 || pos.y >= world.level.h || pos.x < 0 || pos.x >= world.level.w {
+		fmt.println("BUG", pos)
+		return
+	}
 	world.level.tiles[(pos.y * world.level.w) + pos.x] = t
 }
 
