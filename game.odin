@@ -39,14 +39,13 @@ Direction :: enum {
 Settings :: struct #packed {
 	fps, tps: uint,
 	vsync: bool,
-	show_stats, show_hitboxes: bool,
+	show_stats: bool,
 }
 default_settings: Settings : {
 	fps = 60,
 	tps = 30,
 	vsync = true,
 	show_stats = true,
-	show_hitboxes = true,
 }
 settings: Settings = default_settings
 
@@ -87,6 +86,8 @@ Player :: struct {
 	idle: Animation,
 	dying: Animation,
 	fading: Animation,
+
+	belt: bool,
 }
 
 Level :: struct {
@@ -94,7 +95,8 @@ Level :: struct {
 	w, h: int,
 	tiles: []Tiles,
 	carrots: int,
-	end: Animation,
+	animation: Animation,
+	end: bool,
 }
 
 World :: struct {
@@ -233,12 +235,13 @@ grass_sprites: map[bit_set[Direction]]Sprites = {
 }
 
 fence_sprites: map[bit_set[Direction]]Sprites = {
-	{.Right, .Left} = .Fence_Right_Left,
-	{.Down}         = .Fence_Down,
-	{.Right, .Down} = .Fence_Right_Down,
-	{.Left, .Down}  = .Fence_Left_Down,
-	{.Right}        = .Fence_Right,
-	{.Left}         = .Fence_Left,
+	{.Right, .Left}        = .Fence_Right_Left,
+	{.Down}                = .Fence_Down,
+	{.Right, .Down}        = .Fence_Right_Down,
+	{.Left, .Down}         = .Fence_Left_Down,
+	{.Right}               = .Fence_Right,
+	{.Left}                = .Fence_Left,
+	{.Right, .Left, .Down} = .Fence_Right_Left,
 }
 
 idling_animation := [?]Sprite {
@@ -289,6 +292,13 @@ end_animation := [?]Sprite {
 	{{112, 80, 16, 16},{}},
 }
 
+belt_animation := [?]Sprite {
+	{{0,  64, 16, 16},{}},
+	{{16, 64, 16, 16},{}},
+	{{32, 64, 16, 16},{}},
+	{{48, 64, 16, 16},{}},
+}
+
 char_to_tile: map[rune]Tiles = {
 	'.' = .Grass,
 	' ' = .Ground,
@@ -297,6 +307,10 @@ char_to_tile: map[rune]Tiles = {
 	'c' = .Carrot,
 	'-' = .Fence,
 	't' = .Trap,
+	'l' = .Belt_Left,
+	'r' = .Belt_Right,
+	'u' = .Belt_Up,
+	'd' = .Belt_Down,
 }
 
 levels: [][]string = {
@@ -345,6 +359,127 @@ levels: [][]string = {
 		"... s ...",
 		"...   ...",
 		".........",
+	},
+	{
+		"..............",
+		"..  ---------.",
+
+		"..  -ccc-ccc-.",
+		"..  tccctccc-.",
+		"..  -ccc-ccc-.",
+		"..  ------t--.",
+		".   -ccc-ccc-.",
+		". s tcectccc-.",
+		".   -ccc-ccc-.",
+		"..  ---------.",
+		"..............",
+	},
+	{
+		"...............",
+		"....... .......",
+		"...... e ......",
+		".t           t.",
+		".c.....t.....c.",
+		".c.....c.....c.",
+		".c...cctcc...c.",
+		".t   cc.cc   t.",
+		".....cctcc.....",
+		"....... .......",
+		"....... .......",
+		"......   ......",
+		"...... s ......",
+		"......   ......",
+		"...............",
+	},
+	{
+		"...............",
+		"........   ....",
+		"..c  t   e ....",
+		".. .....   ....",
+		"..t......t.....",
+		".. ..cc     cc.",
+		"..c  cc --- cc.",
+		".....cc     cc.",
+		".......t...t...",
+		".......ctttc...",
+		".......t...t...",
+		".   ..  ccc  ..",
+		". s     ctc  ..",
+		".   ..  ccc  ..",
+		"...............",
+	},
+	{
+		"..............",
+		"ccc..ccc..ccc.",
+		"cc tt c tt cc.",
+		"c  ..   ..  c.",
+		".t....t....t..",
+		".t....t....t..",
+		"c  ..   ..  c.",
+		"cc tt e tt cc.",
+		"c  ..   ..  c.",
+		".t....t....t..",
+		".t....t....t..",
+		"   ..   ..  c.",
+		" s tt c tt cc.",
+		"   ..ccc..ccc.",
+		"..............",
+	},
+	{
+		"..............",
+		".   ..  ......",
+		". e rr  tctct.",
+		".   ..  .tc.c.",
+		".   ..  .ctct.",
+		". s ll  ttct..",
+		".   ..  ..tc..",
+		"..............",
+	},
+	{
+		"...........",
+		".ccc...ccc.",
+		".cscrrrccc.",
+		".ccc...ccc.",
+		"..d..... ..",
+		"..d..... ..",
+		".   ...ccc.",
+		". e tctccc.",
+		".   ...ccc.",
+		"...........",
+	},
+	{
+		".........",
+		"..  e  ..",
+		"..     ..",
+		"..t-t-t..",
+		".cc-c-cc.",
+		".cc-d-cc.",
+		".cc-c-cc.",
+		".t--t--t.",
+		".       .",
+		"....u....",
+		"....u....",
+		"...   ...",
+		"... s ...",
+		"...ccc...",
+		".........",
+	},
+	{
+		"...............",
+		"....cc e cc....",
+		"....--- ---....",
+		".t           t.",
+		".c...t-t-t...c.",
+		".clllc-c-clllc.",
+		".c...--t--...c.",
+		".t           t.",
+		".....     .....",
+		".......u.......",
+		".......u.......",
+		"......   ......",
+		"...... s ......",
+		"......ccc......",
+		"...............",
 	},
 }
 
@@ -461,6 +596,13 @@ interpolate_smooth_position :: #force_inline proc(frame_pos, tick_time: time.Dur
 	return {x, y}
 }
 
+/*
+TODO:
+display carrots left
+keys
+show level end screen
+show game end screen
+*/
 render :: proc(window: ^swin.Window) {
 	previous_tick: time.Tick
 	tick_time: time.Duration
@@ -564,13 +706,15 @@ render :: proc(window: ^swin.Window) {
 					if get_level_tile({x + 1, y}) == .Fence do d += {.Right}
 					//if get_level_tile({x, y - 1}) == .Fence do d += {.Up}
 					if get_level_tile({x, y + 1}) == .Fence do d += {.Down}
-					sprite = sprites[fence_sprites[d] or_else .Fence_Right]
+					sprite = sprites[fence_sprites[d] or_else .Fence_Down]
 				case .End:
-					if world.level.end.state {
-						sprite = end_animation[world.level.end.frame]
+					if level.end {
+						sprite = end_animation[level.animation.frame]
 					} else {
 						sprite = sprites[.End]
 					}
+				case .Belt_Right, .Belt_Left, .Belt_Down, .Belt_Up:
+					sprite = get_belt_sprite(level.animation.frame, tile)
 				case .Start: sprite = sprites[.Start]
 				case .Carrot: sprite = sprites[.Carrot]
 				case .Carrot_Hole: sprite = sprites[.Carrot_Hole]
@@ -605,11 +749,47 @@ render :: proc(window: ^swin.Window) {
 	}
 }
 
-can_move_to :: proc(x, y: int) -> bool {
-	tile := get_level_tile({x, y})
+can_move :: proc(pos: [2]int, d: Direction, belt: bool) -> bool {
+	pos := pos
+
+	if pos.x == world.level.w - 1 || pos.x == 0 || pos.y == world.level.h - 1 || pos.y == 0 {
+		return false
+	}
+
+	current_tile := get_level_tile(pos)
+	#partial switch d {
+	case .Right: pos.x += 1
+	case .Left:  pos.x -= 1
+	case .Down:  pos.y += 1
+	case .Up:    pos.y -= 1
+	}
+	tile := get_level_tile(pos)
+
 	if tile == .Grass || tile == .Fence {
 		return false
 	}
+
+	if d == .Right && tile == .Belt_Left {
+		return false
+	}
+	if d == .Left && tile == .Belt_Right {
+		return false
+	}
+	if d == .Down && tile == .Belt_Up {
+		return false
+	}
+	if d == .Up && tile == .Belt_Down {
+		return false
+	}
+
+	if belt {
+		return true
+	}
+
+	if current_tile == .Belt_Left || current_tile == .Belt_Right || current_tile == .Belt_Down || current_tile == .Belt_Up {
+		return false
+	}
+
 	return true
 }
 
@@ -617,17 +797,13 @@ move_player :: #force_inline proc(d: Direction) {
 	if !world.player.dying.state && !world.player.fading.state && !world.player.walking.state {
 		#partial switch d {
 		case .Right:
-			if world.player.x == world.level.w - 1 do return
-			if !can_move_to(world.player.x + 1, world.player.y) do return
+			if !can_move(world.player, .Right, world.player.belt) do return
 		case .Left:
-			if world.player.x == 0 do return
-			if !can_move_to(world.player.x - 1, world.player.y) do return
+			if !can_move(world.player, .Left, world.player.belt) do return
 		case .Down:
-			if world.player.y == world.level.h - 1 do return
-			if !can_move_to(world.player.x, world.player.y + 1) do return
+			if !can_move(world.player, .Down, world.player.belt) do return
 		case .Up:
-			if world.player.y == 0 do return
-			if !can_move_to(world.player.x, world.player.y - 1) do return
+			if !can_move(world.player, .Up, world.player.belt) do return
 		}
 		world.player.direction = d
 		world.player.walking.state = true
@@ -644,7 +820,7 @@ get_level_tile :: #force_inline proc(pos: [2]int) -> Tiles {
 
 set_level_tile :: #force_inline proc(pos: [2]int, t: Tiles) {
 	if pos.y < 0 || pos.y >= world.level.h || pos.x < 0 || pos.x >= world.level.w {
-		fmt.println("BUG", pos)
+		fmt.println("BUG", pos, t)
 		return
 	}
 	world.level.tiles[(pos.y * world.level.w) + pos.x] = t
@@ -653,14 +829,10 @@ set_level_tile :: #force_inline proc(pos: [2]int, t: Tiles) {
 move_player_to_tile :: proc(d: Direction) {
 	original_pos := world.player.pos
 	#partial switch d {
-	case .Right:
-		world.player.x += 1
-	case .Left:
-		world.player.x -= 1
-	case .Down:
-		world.player.y += 1
-	case .Up:
-		world.player.y -= 1
+	case .Right: world.player.x += 1
+	case .Left:  world.player.x -= 1
+	case .Down:  world.player.y += 1
+	case .Up:    world.player.y -= 1
 	}
 	original_tile := get_level_tile(original_pos)
 	current_tile := get_level_tile(world.player)
@@ -668,6 +840,11 @@ move_player_to_tile :: proc(d: Direction) {
 	#partial switch original_tile {
 	case .Trap:
 		set_level_tile(original_pos, .Trap_Activated)
+	case .Belt_Right, .Belt_Left, .Belt_Down, .Belt_Up:
+		if current_tile != .Belt_Left && current_tile != .Belt_Right && current_tile != .Belt_Down && current_tile != .Belt_Up {
+			// if moved from belt unto anything else
+			world.player.belt = false
+		}
 	}
 
 	#partial switch current_tile {
@@ -675,7 +852,7 @@ move_player_to_tile :: proc(d: Direction) {
 		set_level_tile(world.player, .Carrot_Hole)
 		world.level.carrots -= 1
 		if world.level.carrots == 0 {
-			world.level.end.state = true
+			world.level.end = true
 		}
 	case .Trap_Activated:
 		world.player.dying.state = true
@@ -683,6 +860,8 @@ move_player_to_tile :: proc(d: Direction) {
 		if world.level.carrots == 0 {
 			world.player.fading.state = true
 		}
+	case .Belt_Right, .Belt_Left, .Belt_Down, .Belt_Up:
+		world.player.belt = true
 	}
 }
 
@@ -692,7 +871,7 @@ load_level :: proc(index: int) {
 	}
 
 	world.level = {
-		end = {
+		animation = {
 			frame_len = 2,
 		},
 	}
@@ -737,39 +916,48 @@ load_level :: proc(index: int) {
 }
 
 keyboard_handler :: proc(key: swin.Key_Code, released: bool) {
-	if world.menu{
-		#partial switch key {
-		case .Enter:
-			if world.menu && released {
+	if world.menu {
+		if released {
+			#partial switch key {
+			case .Enter:
 				// TODO: load levels properly
-				load_level(world.level.index)
+				load_level(len(levels)-1)
+				world.menu = false
+			case .F1:
+				load_level(0)
 				world.menu = false
 			}
 		}
 	} else {
-		if released {
-			#partial switch key {
-			case .Escape:
-				if !world.menu {
-					world.menu = true
-				}
-			case .Num1: load_level(0)
-			case .Num2: load_level(1)
-			case .Num3: load_level(2)
-			case .R: world.player.dying.state = true
-			}
-		}
-
 		#partial switch key {
 		case .Right: move_player(.Right)
 		case .Left:  move_player(.Left)
 		case .Down:  move_player(.Down)
 		case .Up:    move_player(.Up)
+		case .Escape:
+			if !world.menu {
+				world.menu = true
+			}
+		case .R: world.player.dying.state = true
+		case .F: world.player.fading.state = true
 		}
 	}
 }
 
-player_set_walking_frame :: proc(frame: uint) {
+get_belt_sprite :: proc(frame: uint, t: Tiles) -> Sprite {
+	sprite := belt_animation[frame]
+	#partial switch t {
+	case .Belt_Right:
+		sprite.x += 64
+	case .Belt_Up:
+		sprite.x += 128
+	case .Belt_Down:
+		sprite.y += 16
+	}
+	return sprite
+}
+
+player_set_walking_sprite :: proc(frame: uint) {
 	world.player.sprite = walking_animation[frame]
 	#partial switch world.player.direction {
 	case .Left:
@@ -802,6 +990,7 @@ update_world :: proc(t: ^thread.Thread) {
 
 			if world.menu {
 			} else {
+				// animations
 				switch {
 				case world.player.walking.state:
 					world.player.idle.state = false
@@ -822,7 +1011,11 @@ update_world :: proc(t: ^thread.Thread) {
 						world.player.walking.frame = 0
 						move_player_to_tile(world.player.direction)
 					} else {
-						player_set_walking_frame(world.player.walking.frame + 1)
+						if world.player.belt {
+							player_set_walking_sprite(0)
+						} else {
+							player_set_walking_sprite(world.player.walking.frame + 1)
+						}
 					}
 				case world.player.dying.state:
 					world.player.dying.timer += 1
@@ -862,20 +1055,29 @@ update_world :: proc(t: ^thread.Thread) {
 					}
 					world.player.sprite = idling_animation[world.player.idle.frame]
 				case:
-					player_set_walking_frame(0)
+					player_set_walking_sprite(0)
 					world.player.idle.timer += 1
 					if world.player.idle.timer > IDLING_TIME {
 						world.player.idle.timer = 0
 						world.player.idle.state = true
 					}
 				}
-			}
 
-			if world.level.end.state {
-				world.level.end.timer += 1
-				if world.level.end.timer % world.level.end.frame_len == 0 {
-					world.level.end.frame += 1
-					world.level.end.frame %= len(end_animation)
+				world.level.animation.timer += 1
+				if world.level.animation.timer % world.level.animation.frame_len == 0 {
+					world.level.animation.frame += 1
+					world.level.animation.frame %= len(end_animation) // all persistent animations have the same amount of frames
+				}
+
+				// belts
+				if world.player.belt {
+					tile := get_level_tile(world.player)
+					#partial switch tile {
+					case .Belt_Left:  move_player(.Left)
+					case .Belt_Right: move_player(.Right)
+					case .Belt_Down:  move_player(.Down)
+					case .Belt_Up:    move_player(.Up)
+					}
 				}
 			}
 
@@ -920,8 +1122,7 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 			#partial switch ev.key {
 			case .Q: window.must_close = true
 			case .V: settings.vsync = !settings.vsync
-			case .F: settings.show_stats = !settings.show_stats
-			case .H: settings.show_hitboxes = !settings.show_hitboxes
+			case .I: settings.show_stats = !settings.show_stats
 			case .N: save_data("settings.save", &settings)
 			case .B: settings = default_settings
 			case .Num0: settings.fps = 0
