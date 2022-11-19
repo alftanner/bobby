@@ -684,7 +684,7 @@ load_level :: proc(index: int) {
 			frame_len = 2,
 		},
 		dying = {
-			frame_len = 3,
+			frame_len = 3 when !ODIN_DEBUG else 1,
 		},
 		fading = {
 			frame_len = 2,
