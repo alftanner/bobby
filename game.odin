@@ -55,7 +55,7 @@ TILES_H :: 12
 TILE_SIZE :: 16
 TPS_SECOND :: default_settings.tps
 IDLING_TIME :: TPS_SECOND * 5 // how much time before starts idling
-LAYING_DEAD_TIME :: TPS_SECOND // how much time after dying
+LAYING_DEAD_TIME :: TPS_SECOND when !ODIN_DEBUG else 0 // how much time after dying
 BUFFER_W :: TILES_W * TILE_SIZE
 BUFFER_H :: TILES_H * TILE_SIZE
 WINDOW_W :: BUFFER_W * 2
@@ -780,7 +780,10 @@ update_world :: proc(t: ^thread.Thread) {
 					if world.player.walking.timer % world.player.walking.frame_len == 0 {
 						world.player.walking.frame += 1
 					}
-					if world.player.walking.frame >= len(walking_animation) - 1 {
+
+					WALKING_ANIMATION_LEN :: len(walking_animation) - 1 when !ODIN_DEBUG else 3 // speed walking during debug
+
+					if world.player.walking.frame >= WALKING_ANIMATION_LEN {
 						world.player.walking.state = false
 						world.player.walking.timer = 0
 						world.player.walking.frame = 0
