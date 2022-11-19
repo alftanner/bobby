@@ -37,7 +37,7 @@ Direction :: enum {
 
 // since settings will be saved to the file, they probably should be packed
 Settings :: struct #packed {
-	fps, tps: int,
+	fps, tps: uint,
 	vsync: bool,
 	show_stats, show_hitboxes: bool,
 }
@@ -50,10 +50,16 @@ default_settings: Settings : {
 }
 settings: Settings = default_settings
 
-TPS_SECOND :: default_settings.tps
-MOVE_FRAMES :: TPS_SECOND / 2
-IDLE_FRAMES :: TPS_SECOND * 2
+TILES_W :: 16
+TILES_H :: 12
 TILE_SIZE :: 16
+TPS_SECOND :: default_settings.tps
+IDLING_TIME :: TPS_SECOND * 5 // how much time before starts idling
+LAYING_DEAD_TIME :: TPS_SECOND // how much time after dying
+BUFFER_W :: TILES_W * TILE_SIZE
+BUFFER_H :: TILES_H * TILE_SIZE
+WINDOW_W :: BUFFER_W * 2
+WINDOW_H :: BUFFER_H * 2
 
 Sprite :: struct {
 	using rect: swin.Rect,
@@ -65,18 +71,30 @@ Pos :: struct {
 	prev: [2]int,
 }
 
+Animation :: struct {
+	state: bool,
+	timer: uint,
+	frame: uint,
+	frame_len: uint,
+}
+
 Player :: struct {
 	using position: Pos,
-	is_dead: bool,
-
 	sprite: Sprite,
-
 	direction: Direction,
-	moving: bool,
-	moving_timer: int,
 
-	idle: bool,
-	idle_timer: int,
+	walking: Animation,
+	idle: Animation,
+	dying: Animation,
+	fading: Animation,
+}
+
+Level :: struct {
+	index: int,
+	w, h: int,
+	tiles: []Tiles,
+	carrots: int,
+	end: Animation,
 }
 
 World :: struct {
@@ -86,16 +104,10 @@ World :: struct {
 	player: Player,
 	menu: bool,
 
-	level: int,
-	level_map: []string,
+	level: Level,
 }
 world: World = {
-	menu = false,
-	level_map = levels[0],
-	player = {
-		direction = .Down,
-		sprite = idle_animation[0],
-	},
+	menu = true,
 }
 
 State :: struct {
@@ -131,8 +143,8 @@ Tiles :: enum {
 	Wall_Left_Down,
 	Wall_Up_Down,
 	Wall_Left_Right,
-	Spikes,
-	Spikes_Activated,
+	Trap,
+	Trap_Activated,
 	Belt_Left,
 	Belt_Right,
 	Belt_Up,
@@ -181,8 +193,8 @@ Sprites :: enum {
 	Wall_Left_Down,
 	Wall_Up_Down,
 	Wall_Left_Right,
-	Spikes,
-	Spikes_Activated,
+	Trap,
+	Trap_Activated,
 	Belt_Left,
 	Belt_Right,
 	Belt_Up,
@@ -216,23 +228,53 @@ grass_sprites: map[bit_set[Direction]]Sprites = {
 	{.Right, .Left}             = .Grass_Right_Left,
 }
 
-idle_animation := [?]Sprite {
-	{{0,  96, 18, 25}, {-1, 7}},
-	{{18, 96, 18, 25}, {-1, 7}},
-	{{36, 96, 18, 25}, {-1, 7}},
+idling_animation := [?]Sprite {
+	{{0,  96, 18, 25}, {-1, -9}},
+	{{18, 96, 18, 25}, {-1, -9}},
+	{{36, 96, 18, 25}, {-1, -9}},
 }
 
-walk_animation := [?]Sprite {
-	{{0,   121, 18, 25}, {-1, 7}},
-	{{18,  121, 18, 25}, {-1, 7}},
-	{{36,  121, 18, 25}, {-1, 7}},
-	{{54,  121, 18, 25}, {-1, 7}},
-	{{72,  121, 18, 25}, {-1, 7}},
-	{{90,  121, 18, 25}, {-1, 7}},
-	{{108, 121, 18, 25}, {-1, 7}},
-	{{126, 121, 18, 25}, {-1, 7}},
+walking_animation := [?]Sprite {
+	{{54,  121, 18, 25}, {-1, -9}},
+	{{0,   121, 18, 25}, {-1, -9}},
+	{{18,  121, 18, 25}, {-1, -9}},
+	{{36,  121, 18, 25}, {-1, -9}},
+	{{54,  121, 18, 25}, {-1, -9}},
+	{{72,  121, 18, 25}, {-1, -9}},
+	{{90,  121, 18, 25}, {-1, -9}},
+	{{108, 121, 18, 25}, {-1, -9}},
+	{{126, 121, 18, 25}, {-1, -9}},
 }
-IDLE_FRAME :: 3
+
+dying_animation := [?]Sprite {
+	{{0,   247, 22, 27}, {-3, -11}},
+	{{22,  247, 22, 27}, {-3, -11}},
+	{{44,  247, 22, 27}, {-3, -11}},
+	{{66,  247, 22, 27}, {-3, -11}},
+	{{88,  247, 22, 27}, {-3, -11}},
+	{{110, 247, 22, 27}, {-3, -11}},
+	{{132, 247, 22, 27}, {-3, -11}},
+	{{154, 247, 22, 27}, {-3, -11}},
+}
+
+fading_animation := [?]Sprite {
+	{{0,   221, 18, 25}, {-1, -9}},
+	{{18,  221, 18, 25}, {-1, -9}},
+	{{36,  221, 18, 25}, {-1, -9}},
+	{{54,  221, 18, 25}, {-1, -9}},
+	{{72,  221, 18, 25}, {-1, -9}},
+	{{90,  221, 18, 25}, {-1, -9}},
+	{{108, 221, 18, 25}, {-1, -9}},
+	{{126, 221, 18, 25}, {-1, -9}},
+	{{144, 221, 18, 25}, {-1, -9}},
+}
+
+end_animation := [?]Sprite {
+	{{64,  80, 16, 16},{}},
+	{{80,  80, 16, 16},{}},
+	{{96,  80, 16, 16},{}},
+	{{112, 80, 16, 16},{}},
+}
 
 char_to_tile: map[rune]Tiles = {
 	'.' = .Grass,
@@ -241,20 +283,55 @@ char_to_tile: map[rune]Tiles = {
 	'e' = .End,
 	'c' = .Carrot,
 	'-' = .Fence,
+	't' = .Trap,
 }
 
 levels: [][]string = {
 	{
-		"..   ..",
-		"   e   ",
-		" ----- ",
-		" -ccc- ",
-		" -ccc- ",
-		" -ccc- ",
-		" -- -- ",
-		"       ",
-		"   s   ",
-		"..   ..",
+		".........",
+		"...   ...",
+		".   e   .",
+		". ----- .",
+		". -ccc- .",
+		". -ccc- .",
+		". -ccc- .",
+		". -- -- .",
+		".       .",
+		".   s   .",
+		"...   ...",
+		".........",
+	},
+	{
+		"...........",
+		"....   ....",
+		".... e ....",
+		".         .",
+		". ---t--- .",
+		". -ccccc- .",
+		". -c c c- .",
+		". -ccccc- .",
+		". ---t--- .",
+		".         .",
+		"....   ....",
+		".... s ....",
+		"....   ....",
+		"...........",
+	},
+	{
+		".........",
+		".... ....",
+		"... e ...",
+		".       .",
+		".... ....",
+		"..cctcc..",
+		"..cctcc..",
+		"..cctcc..",
+		".... ....",
+		".... ....",
+		"...   ...",
+		"... s ...",
+		"...   ...",
+		".........",
 	},
 }
 
@@ -266,7 +343,7 @@ get_2_ints :: #force_inline proc(p: ^i64) -> (i32, i32) {
 	return expand_to_tuple(transmute([2]i32)sync.atomic_load(p))
 }
 
-limit_frame :: proc(frame_time: time.Duration, frame_limit: int, accurate := true) {
+limit_frame :: proc(frame_time: time.Duration, frame_limit: uint, accurate := true) {
 	if frame_limit <= 0 do return
 
 	ms_per_frame := time.Duration((1000.0 / f64(frame_limit)) * f64(time.Millisecond))
@@ -345,9 +422,9 @@ draw_stats :: proc(canvas: ^swin.Texture2D) {
 }
 
 interpolate_tile_position :: #force_inline proc(frame_pos, tick_time: time.Duration, p: Player) -> [2]f32 {
-	if p.moving {
-		frame_len := 1/f32(MOVE_FRAMES)
-		pos := f32(p.moving_timer) * frame_len
+	if p.walking.state {
+		frame_len := 1/f32(world.player.walking.frame_len * (len(walking_animation) - 1))
+		pos := f32(p.walking.timer) * frame_len
 		frame_delta := f32(frame_pos) * (frame_len/f32(tick_time))
 		delta := pos + frame_delta
 
@@ -375,7 +452,10 @@ render :: proc(window: ^swin.Window) {
 	previous_tick: time.Tick
 	tick_time: time.Duration
 	draw_player := world.player
+	menu := world.menu
+	level := world.level
 
+/*
 	client_w, client_h := get_2_ints(&global_state.client_size)
 	canvas := swin.texture_make(int(client_w), int(client_h))
 
@@ -385,23 +465,28 @@ render :: proc(window: ^swin.Window) {
 	for y in 0..<tiles_h do for x in 0..<tiles_w {
 		swin.draw_from_texture(&menu_bg, atlas, x*TILE_SIZE, y*TILE_SIZE, sprites[.Grass])
 	}
+*/
+
+	canvas := swin.texture_make(BUFFER_W, BUFFER_H)
+	background := swin.texture_make(BUFFER_W, BUFFER_H)
+	for y in 0..<TILES_H do for x in 0..<TILES_W {
+		swin.draw_from_texture(&background, atlas, x * TILE_SIZE, y * TILE_SIZE, sprites[.Grass])
+	}
 
 	clear_color := swin.color(expand_to_tuple(SKY_BLUE))
 
 	for {
 		start_tick := time.tick_now()
 
-		client_w, client_h = get_2_ints(&global_state.client_size)
-		if int(client_w) != canvas.w || int(client_h) != canvas.h {
-			swin.texture_destroy(canvas)
-			canvas = swin.texture_make(int(client_w), int(client_h))
+		client_w, client_h := get_2_ints(&global_state.client_size)
+		tw := int(math.ceil(f32(client_w) / TILE_SIZE))
+		th := int(math.ceil(f32(client_h) / TILE_SIZE))
 
-			tiles_w = int(math.ceil(f32(client_w) / TILE_SIZE))
-			tiles_h = int(math.ceil(f32(client_h) / TILE_SIZE))
-			swin.texture_destroy(menu_bg)
-			menu_bg = swin.texture_make(tiles_w*TILE_SIZE, tiles_h*TILE_SIZE)
-			for y in 0..<tiles_h do for x in 0..<tiles_w {
-				swin.draw_from_texture(&menu_bg, atlas, x*TILE_SIZE, y*TILE_SIZE, sprites[.Grass])
+		if tw * TILE_SIZE != background.w || th * TILE_SIZE != background.h {
+			swin.texture_destroy(background)
+			background = swin.texture_make(tw * TILE_SIZE, th*TILE_SIZE)
+			for y in 0..<th do for x in 0..<tw {
+				swin.draw_from_texture(&background, atlas, x*TILE_SIZE, y*TILE_SIZE, sprites[.Grass])
 			}
 		}
 
@@ -409,6 +494,8 @@ render :: proc(window: ^swin.Window) {
 			sync.guard(&world.lock)
 
 			// save the world state
+			menu = world.menu
+			level = world.level
 			draw_player = world.player
 			previous_tick = global_state.previous_tick
 			tick_time = sync.atomic_load(&global_state.tick_time)
@@ -416,31 +503,75 @@ render :: proc(window: ^swin.Window) {
 			sync.atomic_store(&world.updated, false)
 		}
 
-		// draw the world
-		if sync.atomic_load(&world.menu) {
-			swin.draw_from_texture(&canvas, menu_bg, 0, 0, {0, 0, canvas.w, canvas.h})
-			swin.draw_from_texture(&canvas, atlas, 50, 50, {0, 273, 128, 128})
+		if menu {
+			TITLE_SCREEN :: Sprite{rect = {0, 274, 128, 128}}
+			swin.draw_from_texture(&canvas, background, 0, 0, {0, 0, canvas.w, canvas.h})
+			off_x := (canvas.w - TITLE_SCREEN.w) / 2
+			off_y := (canvas.h - TITLE_SCREEN.h) / 2
+			swin.draw_from_texture(&canvas, atlas, off_x, off_y, TITLE_SCREEN)
 		} else {
 			slice.fill(canvas.pixels, clear_color)
 
-			for row, y in world.level_map do for char, x in row {
-				tile := char_to_tile[char] or_else .Ground
+			player_pos := interpolate_tile_position(time.tick_diff(previous_tick, time.tick_now()), tick_time, draw_player)
+			offset_into_level, offset_around_level: [2]f32
 
+			if level.w < TILES_W {
+				offset_around_level.x = f32(TILES_W - level.w)/2
+			} else {
+				offset_into_level.x = f32(player_pos.x) - f32(TILES_W)/2
+				offset_right := f32(level.w) - TILES_W - offset_into_level.x
+				if offset_right < 0 {
+					offset_into_level.x += offset_right
+				} else {
+					offset_into_level.x = max(offset_into_level.x, 0)
+				}
+			}
+			if level.h < TILES_H {
+				offset_around_level.y = f32(TILES_H - level.h)/2
+			} else {
+				offset_into_level.y = f32(player_pos.y) - f32(TILES_H)/2
+				offset_bottom := f32(level.h) - TILES_H - offset_into_level.y
+				if offset_bottom < 0 {
+					offset_into_level.y += offset_bottom
+				} else {
+					offset_into_level.y = max(offset_into_level.y, 0)
+				}
+			}
+
+			if offset_around_level.x > 0 || offset_around_level.y > 0 {
+				x := -int((offset_around_level.x + offset_into_level.x) * TILE_SIZE)
+				y := -int((offset_around_level.y + offset_into_level.y) * TILE_SIZE)
+				swin.draw_from_texture(&canvas, background, x, y, {0, 0, background.w, background.h})
+			}
+
+			for tile, idx in level.tiles {
 				sprite: Sprite = sprites[.Ground]
 				#partial switch tile {
 				case .Grass: sprite = sprites[.Grass] // TODO: grass generation
+				case .Fence: sprite = sprites[.Fence_Right] // TODO: fence generation
+				case .End:
+					if world.level.end.state {
+						sprite = end_animation[world.level.end.frame]
+					} else {
+						sprite = sprites[.End]
+					}
 				case .Start: sprite = sprites[.Start]
-				case .End: sprite = sprites[.End]
-				case .Fence: sprite = sprites[.Fence_Right]
 				case .Carrot: sprite = sprites[.Carrot]
+				case .Carrot_Hole: sprite = sprites[.Carrot_Hole]
+				case .Trap: sprite = sprites[.Trap]
+				case .Trap_Activated: sprite = sprites[.Trap_Activated]
 				}
 
-				swin.draw_from_texture(&canvas, atlas, x*TILE_SIZE, y*TILE_SIZE, sprite)
+				x := idx%level.w
+				y := idx/level.w
+
+				px := offset_around_level.x - offset_into_level.x + f32(x)
+				py := offset_around_level.y - offset_into_level.y + f32(y)
+				swin.draw_from_texture(&canvas, atlas, int(px * TILE_SIZE), int(py * TILE_SIZE), sprite)
 			}
 
-			player_pos := interpolate_tile_position(time.tick_diff(previous_tick, time.tick_now()), tick_time, draw_player)
-			px := int(player_pos.x * TILE_SIZE) + draw_player.sprite.origin.x
-			py := int(player_pos.y * TILE_SIZE) + draw_player.sprite.origin.y
+			px := int((player_pos.x + offset_around_level.x - offset_into_level.x) * TILE_SIZE) + draw_player.sprite.origin.x
+			py := int((player_pos.y + offset_around_level.y - offset_into_level.y) * TILE_SIZE) + draw_player.sprite.origin.y
 			swin.draw_from_texture(&canvas, atlas, px, py, draw_player.sprite)
 		}
 
@@ -455,38 +586,170 @@ render :: proc(window: ^swin.Window) {
 		} else {
 			limit_frame(time.tick_since(start_tick), settings.fps)
 		}
-		swin.display_pixels(window, canvas, {0, 0, canvas.w, canvas.h})
+		swin.display_pixels(window, canvas, {0, 0, int(client_w), int(client_h)})
 
 		sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 	}
 }
 
-//TODO 16:12
+can_move_to :: proc(x, y: int) -> bool {
+	tile := get_level_tile({x, y})
+	if tile == .Grass || tile == .Fence {
+		return false
+	}
+	return true
+}
 
 move_player :: #force_inline proc(d: Direction) {
-	if !world.player.moving {
+	if !world.player.dying.state && !world.player.fading.state && !world.player.walking.state {
+		#partial switch d {
+		case .Right:
+			if world.player.x == world.level.w - 1 do return
+			if !can_move_to(world.player.x + 1, world.player.y) do return
+		case .Left:
+			if world.player.x == 0 do return
+			if !can_move_to(world.player.x - 1, world.player.y) do return
+		case .Down:
+			if world.player.y == world.level.h - 1 do return
+			if !can_move_to(world.player.x, world.player.y + 1) do return
+		case .Up:
+			if world.player.y == 0 do return
+			if !can_move_to(world.player.x, world.player.y - 1) do return
+		}
 		world.player.direction = d
-		world.player.moving = true
+		world.player.walking.state = true
 	}
 }
 
-keyboard_handler :: proc(key: swin.Key_Code) {
-	#partial switch key {
-	case .Right: move_player(.Right)
-	case .Left:  move_player(.Left)
-	case .Down:  move_player(.Down)
-	case .Up:    move_player(.Up)
+get_level_tile :: #force_inline proc(pos: [2]int) -> Tiles {
+	return world.level.tiles[(pos.y * world.level.w) + pos.x]
+}
+
+set_level_tile :: #force_inline proc(pos: [2]int, t: Tiles) {
+	world.level.tiles[(pos.y * world.level.w) + pos.x] = t
+}
+
+move_player_to_tile :: proc(d: Direction) {
+	original_pos := world.player.pos
+	#partial switch d {
+	case .Right:
+		world.player.x += 1
+	case .Left:
+		world.player.x -= 1
+	case .Down:
+		world.player.y += 1
+	case .Up:
+		world.player.y -= 1
+	}
+	original_tile := get_level_tile(original_pos)
+	current_tile := get_level_tile(world.player)
+
+	#partial switch original_tile {
+	case .Trap:
+		set_level_tile(original_pos, .Trap_Activated)
 	}
 
-	menu := sync.atomic_load(&world.menu)
-	if key == .Enter && menu {
-		sync.atomic_store(&world.menu, false)
-	} else if key == .Escape && !menu {
-		sync.atomic_store(&world.menu, true)
+	#partial switch current_tile {
+	case .Carrot:
+		set_level_tile(world.player, .Carrot_Hole)
+		world.level.carrots -= 1
+		if world.level.carrots == 0 {
+			world.level.end.state = true
+		}
+	case .Trap_Activated:
+		world.player.dying.state = true
+	case .End:
+		if world.level.carrots == 0 {
+			world.player.fading.state = true
+		}
 	}
 }
 
-offset_walking_sprite :: proc() {
+load_level :: proc(index: int) {
+	if len(world.level.tiles) != 0 {
+		delete(world.level.tiles)
+	}
+
+	world.level = {
+		end = {
+			frame_len = 2,
+		},
+	}
+
+	if index >= len(levels) {
+		// TODO: end sequence
+		world.menu = true
+		return
+	}
+
+	world.level.index = index
+	world.level.w = len(levels[index][0])
+	world.level.h = len(levels[index])
+	world.level.tiles = make([]Tiles, world.level.w * world.level.h)
+
+	// reset player
+	world.player = {
+		walking = {
+			frame_len = 2,
+		},
+		idle = {
+			frame_len = 2,
+		},
+		dying = {
+			frame_len = 3,
+		},
+		fading = {
+			frame_len = 2,
+		}
+	}
+
+	for row, y in levels[index] do for char, x in row {
+		tile := char_to_tile[char] or_else .Ground
+		set_level_tile({x, y}, tile)
+		#partial switch tile {
+		case .Start:
+			world.player.pos = {x, y}
+		case .Carrot:
+			world.level.carrots += 1
+		}
+	}
+}
+
+keyboard_handler :: proc(key: swin.Key_Code, released: bool) {
+	if world.menu{
+		#partial switch key {
+		case .Enter:
+			if world.menu && released {
+				// TODO: load levels properly
+				load_level(world.level.index)
+				world.menu = false
+			}
+		}
+	} else {
+		if released {
+			#partial switch key {
+			case .Escape:
+				if !world.menu {
+					world.menu = true
+				}
+			case .Num1: load_level(0)
+			case .Num2: load_level(1)
+			case .Num3: load_level(2)
+			case .R: world.player.dying.state = true
+			}
+		}
+
+		#partial switch key {
+		case .Right: move_player(.Right)
+		case .Left:  move_player(.Left)
+		case .Down:  move_player(.Down)
+		case .Up:    move_player(.Up)
+		}
+	}
+}
+
+player_set_walking_frame :: proc(frame: uint) {
+	world.player.sprite = walking_animation[frame]
 	#partial switch world.player.direction {
 	case .Left:
 		world.player.sprite.y += 25
@@ -511,36 +774,84 @@ update_world :: proc(t: ^thread.Thread) {
 				for data, key in &global_state.key_data {
 					if data == 0 do continue
 
-					keyboard_handler(key)
+					keyboard_handler(key, data == 2)
 					if data == 2 do data = 0
 				}
 			}
 
-			if !world.player.moving {
-				world.player.sprite = walk_animation[IDLE_FRAME]
-				offset_walking_sprite()
-				world.player.idle_timer += 1
-				if world.player.idle_timer > IDLE_FRAMES {
-					world.player.idle = true
-					// TODO: start playing idle animation
-				}
+			if world.menu {
 			} else {
-				world.player.idle_timer = 0
-				world.player.moving_timer += 1
-				if world.player.moving_timer == MOVE_FRAMES {
-					world.player.moving_timer = 0
-					world.player.moving = false
-					#partial switch world.player.direction {
-					case .Right: world.player.x += 1
-					case .Left: world.player.x -= 1
-					case .Down: world.player.y += 1
-					case .Up: world.player.y -= 1
+				switch {
+				case world.player.walking.state:
+					world.player.idle.state = false
+					world.player.idle.timer = 0
+					world.player.idle.frame = 0
+
+					world.player.walking.timer += 1
+
+					if world.player.walking.timer % world.player.walking.frame_len == 0 {
+						world.player.walking.frame += 1
 					}
-				} else {
-					FRAME_LEN :: f32(MOVE_FRAMES) / f32(len(walk_animation))
-					current_frame := int(f32(world.player.moving_timer) / FRAME_LEN)
-					world.player.sprite = walk_animation[current_frame]
-					offset_walking_sprite()
+					if world.player.walking.frame >= len(walking_animation) - 1 {
+						world.player.walking.state = false
+						world.player.walking.timer = 0
+						world.player.walking.frame = 0
+						move_player_to_tile(world.player.direction)
+					} else {
+						player_set_walking_frame(world.player.walking.frame + 1)
+					}
+				case world.player.dying.state:
+					world.player.dying.timer += 1
+
+					if world.player.dying.timer % world.player.dying.frame_len == 0 {
+						world.player.dying.frame += 1
+					}
+					if world.player.dying.frame >= len(dying_animation) {
+						if world.player.dying.timer - (len(dying_animation) * world.player.dying.frame_len) >= LAYING_DEAD_TIME {
+							world.player.dying.state = false
+							world.player.dying.timer = 0
+							world.player.dying.frame = 0
+							load_level(world.level.index)
+						}
+					} else {
+						world.player.sprite = dying_animation[world.player.dying.frame]
+					}
+				case world.player.fading.state:
+					world.player.fading.timer += 1
+
+					if world.player.fading.timer % world.player.fading.frame_len == 0 {
+						world.player.fading.frame += 1
+					}
+					if world.player.fading.frame >= len(fading_animation) {
+						world.player.fading.state = false
+						world.player.fading.timer = 0
+						world.player.fading.frame = 0
+						load_level(world.level.index + 1)
+					} else {
+						world.player.sprite = fading_animation[world.player.fading.frame]
+					}
+				case world.player.idle.state:
+					world.player.idle.timer += 1
+					if world.player.idle.timer % world.player.idle.frame_len == 0 {
+						world.player.idle.frame += 1
+						world.player.idle.frame %= len(idling_animation)
+					}
+					world.player.sprite = idling_animation[world.player.idle.frame]
+				case:
+					player_set_walking_frame(0)
+					world.player.idle.timer += 1
+					if world.player.idle.timer > IDLING_TIME {
+						world.player.idle.timer = 0
+						world.player.idle.state = true
+					}
+				}
+			}
+
+			if world.level.end.state {
+				world.level.end.timer += 1
+				if world.level.end.timer % world.level.end.frame_len == 0 {
+					world.level.end.frame += 1
+					world.level.end.frame %= len(end_animation)
 				}
 			}
 
@@ -627,11 +938,11 @@ load_resources :: proc() {
 		font.table[ch] = len(font.table)
 	}
 
-	MAX_Y :: 12
+	MAX_X :: 12
 	for s in Sprites {
 		idx := int(s)
-		x := idx%MAX_Y
-		y := idx/MAX_Y
+		x := idx%MAX_X
+		y := idx/MAX_X
 		sprites[s] = {rect = {x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE}}
 	}
 }
@@ -651,7 +962,8 @@ _main :: proc() {
 	}
 
 	// Open window
-	ok := swin.create(&window, 640, 480, GAME_TITLE)
+	fmt.println(WINDOW_W, WINDOW_H)
+	ok := swin.create(&window, WINDOW_W, WINDOW_H, GAME_TITLE)
 	assert(ok, "Failed to create window")
 	defer swin.destroy(&window)
 
@@ -662,8 +974,8 @@ _main :: proc() {
 
 	window.clear_color = SKY_BLUE.rgb
 	window.event_handler = event_handler
-	swin.set_resizable(&window, true)
-	swin.set_min_size(&window, 640, 480)
+	//swin.set_resizable(&window, true)
+	swin.set_min_size(&window, WINDOW_W, WINDOW_H)
 
 	save_2_ints(&global_state.client_size, i32(window.client.w), i32(window.client.h))
 
