@@ -455,18 +455,6 @@ render :: proc(window: ^swin.Window) {
 	menu := world.menu
 	level := world.level
 
-/*
-	client_w, client_h := get_2_ints(&global_state.client_size)
-	canvas := swin.texture_make(int(client_w), int(client_h))
-
-	tiles_w := int(math.ceil(f32(client_w) / TILE_SIZE))
-	tiles_h := int(math.ceil(f32(client_h) / TILE_SIZE))
-	menu_bg := swin.texture_make(tiles_w*TILE_SIZE, tiles_h*TILE_SIZE)
-	for y in 0..<tiles_h do for x in 0..<tiles_w {
-		swin.draw_from_texture(&menu_bg, atlas, x*TILE_SIZE, y*TILE_SIZE, sprites[.Grass])
-	}
-*/
-
 	canvas := swin.texture_make(BUFFER_W, BUFFER_H)
 	background := swin.texture_make(BUFFER_W, BUFFER_H)
 	for y in 0..<TILES_H do for x in 0..<TILES_W {
@@ -878,6 +866,11 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 			settings.tps = default_settings.tps
 		} else {
 			settings.tps = 3
+			sync.guard(&global_state.key_data_lock)
+			for key in &global_state.key_data {
+				// release all pressed keys
+				if key == 1 do key = 2
+			}
 		}
 	case swin.Draw_Event:
 	case swin.Resize_Event:
