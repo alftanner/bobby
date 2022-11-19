@@ -363,7 +363,6 @@ levels: [][]string = {
 	{
 		"..............",
 		"..  ---------.",
-
 		"..  -ccc-ccc-.",
 		"..  tccctccc-.",
 		"..  -ccc-ccc-.",
@@ -409,21 +408,21 @@ levels: [][]string = {
 		"...............",
 	},
 	{
-		"..............",
-		"ccc..ccc..ccc.",
-		"cc tt c tt cc.",
-		"c  ..   ..  c.",
-		".t....t....t..",
-		".t....t....t..",
-		"c  ..   ..  c.",
-		"cc tt e tt cc.",
-		"c  ..   ..  c.",
-		".t....t....t..",
-		".t....t....t..",
-		"   ..   ..  c.",
-		" s tt c tt cc.",
-		"   ..ccc..ccc.",
-		"..............",
+		"...............",
+		".ccc..ccc..ccc.",
+		".cc tt c tt cc.",
+		".c  ..   ..  c.",
+		"..t....t....t..",
+		"..t....t....t..",
+		".c  ..   ..  c.",
+		".cc tt e tt cc.",
+		".c  ..   ..  c.",
+		"..t....t....t..",
+		"..t....t....t..",
+		".   ..   ..  c.",
+		". s tt c tt cc.",
+		".   ..ccc..ccc.",
+		"...............",
 	},
 	{
 		"..............",
@@ -647,7 +646,7 @@ render :: proc(window: ^swin.Window) {
 		}
 
 		if menu {
-			TITLE_SCREEN :: Sprite{rect = {0, 274, 128, 128}}
+			TITLE_SCREEN :: Sprite{{0, 274, 128, 128},{}}
 			swin.draw_from_texture(&canvas, background, 0, 0, {0, 0, canvas.w, canvas.h})
 			off_x := (canvas.w - TITLE_SCREEN.w) / 2
 			off_y := (canvas.h - TITLE_SCREEN.h) / 2
@@ -682,9 +681,9 @@ render :: proc(window: ^swin.Window) {
 			}
 
 			if offset_around_level.x > 0 || offset_around_level.y > 0 {
-				x := -int((offset_around_level.x + offset_into_level.x) * TILE_SIZE)
-				y := -int((offset_around_level.y + offset_into_level.y) * TILE_SIZE)
-				swin.draw_from_texture(&canvas, background, x, y, {0, 0, background.w, background.h})
+				off_x := int((offset_around_level.x + offset_into_level.x) * TILE_SIZE)
+				off_y := int((offset_around_level.y + offset_into_level.y) * TILE_SIZE)
+				swin.draw_from_texture(&canvas, background, -off_x, -off_y, {0, 0, background.w, background.h})
 			}
 
 			for tile, idx in level.tiles {
@@ -751,17 +750,29 @@ render :: proc(window: ^swin.Window) {
 
 can_move :: proc(pos: [2]int, d: Direction, belt: bool) -> bool {
 	pos := pos
-
-	if pos.x == world.level.w - 1 || pos.x == 0 || pos.y == world.level.h - 1 || pos.y == 0 {
-		return false
-	}
-
 	current_tile := get_level_tile(pos)
+
 	#partial switch d {
-	case .Right: pos.x += 1
-	case .Left:  pos.x -= 1
-	case .Down:  pos.y += 1
-	case .Up:    pos.y -= 1
+	case .Right:
+		if pos.x == world.level.w - 1 {
+			return false
+		}
+		pos.x += 1
+	case .Left:
+		if pos.x == 0 {
+			return false
+		}
+		pos.x -= 1
+	case .Down:
+		if pos.y == world.level.h - 1 {
+			return false
+		}
+		pos.y += 1
+	case .Up:
+		if pos.y == 0 {
+			return false
+		}
+		pos.y -= 1
 	}
 	tile := get_level_tile(pos)
 
@@ -1173,7 +1184,7 @@ load_resources :: proc() {
 		idx := int(s)
 		x := idx%MAX_X
 		y := idx/MAX_X
-		sprites[s] = {rect = {x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE}}
+		sprites[s] = {{x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE},{}}
 	}
 }
 
