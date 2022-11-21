@@ -252,6 +252,15 @@ fence_sprites: map[bit_set[Direction]]Sprites = {
 	{.Right, .Left, .Down} = .Fence_Right_Left,
 }
 
+wall_switch: map[Tiles]Tiles = {
+	.Wall_Left_Right = .Wall_Up_Down,
+	.Wall_Up_Down = .Wall_Left_Right,
+	.Wall_Right_Up = .Wall_Right_Down,
+	.Wall_Left_Down = .Wall_Left_Up,
+	.Wall_Right_Down = .Wall_Left_Down,
+	.Wall_Left_Up = .Wall_Right_Up,
+}
+
 idling_animation := [?]Sprite {
 	{{0,  96, 18, 25}, {-1, -9}},
 	{{18, 96, 18, 25}, {-1, -9}},
@@ -325,6 +334,10 @@ char_to_tile: map[rune]Tiles = {
 	'[' = .Wall_Left_Down,
 	'「' = .Wall_Left_Up,
 	'」' = .Wall_Right_Down,
+	'B' = .Red_Button,
+	'b' = .Red_Button_Pressed,
+	'Y' = .Yellow_Button,
+	'y' = .Yellow_Button_Pressed,
 }
 
 levels: [][]string = {
@@ -552,6 +565,20 @@ levels: [][]string = {
 		"....   ..  [c[ .",
 		".... e     |.| .",
 		"....   ..      .",
+		"................",
+	},
+	{
+		"................",
+		".-----......y...",
+		".-ccc Y.       .",
+		".-ccc .. ---d--.",
+		".-ccc ll tly  -.",
+		".-    ..u-cccc-.",
+		".--_--..u-cccc-.",
+		".     ..u-cccc-.",
+		". s B ll -Y   -.",
+		".     ..y------.",
+		".. e ...........",
 		"................",
 	},
 }
@@ -824,6 +851,10 @@ render :: proc(window: ^swin.Window) {
 				case .Wall_Right_Down: sprite = sprites[.Wall_Right_Down]
 				case .Wall_Left_Up: sprite = sprites[.Wall_Left_Up]
 				case .Wall_Left_Down: sprite = sprites[.Wall_Left_Down]
+				case .Red_Button: sprite = sprites[.Red_Button]
+				case .Red_Button_Pressed: sprite = sprites[.Red_Button_Pressed]
+				case .Yellow_Button: sprite = sprites[.Yellow_Button]
+				case .Yellow_Button_Pressed: sprite = sprites[.Yellow_Button_Pressed]
 				}
 
 				px := (x * TILE_SIZE) + int(offset.x * TILE_SIZE)
@@ -983,6 +1014,43 @@ set_level_tile :: #force_inline proc(level: ^Level, pos: [2]int, t: Tiles) {
 	level.tiles[(pos.y * level.w) + pos.x] = t
 }
 
+press_red_button :: proc() {
+	for tile, idx in world.level.tiles {
+		x := idx%world.level.w
+		y := idx/world.level.w
+		#partial switch tile {
+		case .Red_Button:
+			set_level_tile(&world.level, {x, y}, .Red_Button_Pressed)
+		case .Red_Button_Pressed:
+			set_level_tile(&world.level, {x, y}, .Red_Button)
+		case .Wall_Left_Right, .Wall_Up_Down, .Wall_Right_Up, .Wall_Left_Down, .Wall_Right_Down, .Wall_Left_Up:
+			new_tile := wall_switch[tile] or_else .Egg
+			set_level_tile(&world.level, {x, y}, new_tile)
+		}
+	}
+}
+
+press_yellow_button :: proc() {
+	for tile, idx in world.level.tiles {
+		x := idx%world.level.w
+		y := idx/world.level.w
+		#partial switch tile {
+		case .Yellow_Button:
+			set_level_tile(&world.level, {x, y}, .Yellow_Button_Pressed)
+		case .Yellow_Button_Pressed:
+			set_level_tile(&world.level, {x, y}, .Yellow_Button)
+		case .Belt_Left:
+			set_level_tile(&world.level, {x, y}, .Belt_Right)
+		case .Belt_Right:
+			set_level_tile(&world.level, {x, y}, .Belt_Left)
+		case .Belt_Up:
+			set_level_tile(&world.level, {x, y}, .Belt_Down)
+		case .Belt_Down:
+			set_level_tile(&world.level, {x, y}, .Belt_Up)
+		}
+	}
+}
+
 move_player_to_tile :: proc(d: Direction) {
 	original_pos := world.player.pos
 	#partial switch d {
@@ -1002,18 +1070,9 @@ move_player_to_tile :: proc(d: Direction) {
 			// if moved from belt unto anything else
 			world.player.belt = false
 		}
-	case .Wall_Left_Right:
-		set_level_tile(&world.level, original_pos, .Wall_Up_Down)
-	case .Wall_Up_Down:
-		set_level_tile(&world.level, original_pos, .Wall_Left_Right)
-	case .Wall_Right_Up:
-		set_level_tile(&world.level, original_pos, .Wall_Right_Down)
-	case .Wall_Left_Down:
-		set_level_tile(&world.level, original_pos, .Wall_Left_Up)
-	case .Wall_Right_Down:
-		set_level_tile(&world.level, original_pos, .Wall_Left_Down)
-	case .Wall_Left_Up:
-		set_level_tile(&world.level, original_pos, .Wall_Right_Up)
+	case .Wall_Left_Right, .Wall_Up_Down, .Wall_Right_Up, .Wall_Left_Down, .Wall_Right_Down, .Wall_Left_Up:
+		new_tile := wall_switch[original_tile] or_else .Egg
+		set_level_tile(&world.level, original_pos, new_tile)
 	}
 
 	#partial switch current_tile {
@@ -1031,6 +1090,10 @@ move_player_to_tile :: proc(d: Direction) {
 		}
 	case .Belt_Right, .Belt_Left, .Belt_Down, .Belt_Up:
 		world.player.belt = true
+	case .Red_Button:
+		press_red_button()
+	case .Yellow_Button:
+		press_yellow_button()
 	}
 }
 
