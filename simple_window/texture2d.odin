@@ -36,8 +36,9 @@ texture_make :: proc(w, h: int, allocator := context.allocator) -> (t: Texture2D
 	return
 }
 
-texture_destroy :: proc(t: Texture2D) {
+texture_destroy :: proc(t: ^Texture2D) {
 	delete(t.pixels, t.allocator)
+	t^ = {}
 }
 
 color :: proc(r, g, b, a: u8) -> Color {
