@@ -5,13 +5,12 @@ import "core:thread"
 import "core:sync"
 import "core:slice"
 import "core:math"
-import "core:math/ease"
+//import "core:math/ease"
 import "core:image"
 import _ "core:image/png"
 import "core:bytes"
 import "core:os"
 import "core:mem"
-import "core:runtime"
 import "core:fmt"
 
 import swin "simple_window"
@@ -91,7 +90,6 @@ Player :: struct {
 }
 
 Level :: struct {
-	index: int,
 	w, h: int,
 	tiles: []Tiles,
 	carrots: int,
@@ -107,9 +105,17 @@ World :: struct {
 	menu: bool,
 
 	level: Level,
+	current_level: int,
 }
 world: World = {
 	menu = true,
+}
+
+Key_State :: enum {
+	Pressed,
+	Repeated,
+	Held,
+	Released,
 }
 
 State :: struct {
@@ -123,8 +129,10 @@ State :: struct {
 	tick_work, tick_time: time.Duration,
 	previous_tick: time.Tick,
 
-	key_data: [swin.Key_Code]u8, // 0 - not pressed, 1 - pressed, 2 - released
-	key_data_lock: sync.Mutex,
+	frame_inputs: struct {
+		lock: sync.Mutex,
+		keys: [swin.Key_Code]bit_set[Key_State]
+	}
 }
 global_state: State
 
@@ -599,19 +607,39 @@ interpolate_smooth_position :: #force_inline proc(frame_pos, tick_time: time.Dur
 TODO:
 display carrots left
 keys
+menu
 show level end screen
 show game end screen
 */
+
+copy_level :: proc(dst: ^Level, src: Level) {
+	if dst.w != src.w || dst.h != src.h {
+		if len(dst.tiles) != 0 {
+			delete(dst.tiles)
+		}
+
+		dst.w = src.w
+		dst.h = src.h
+		dst.tiles = make([]Tiles, dst.w * dst.h)
+	}
+	dst.carrots = src.carrots
+	dst.animation = src.animation
+	dst.end = src.end
+	for _, idx in dst.tiles {
+		dst.tiles[idx] = src.tiles[idx]
+	}
+}
+
 render :: proc(window: ^swin.Window) {
 	previous_tick: time.Tick
 	tick_time: time.Duration
 	draw_player := world.player
 	menu := world.menu
-	level := world.level
+	level: Level
 
-	canvas := swin.texture_make(BUFFER_W, BUFFER_H)
-	background := swin.texture_make(BUFFER_W, BUFFER_H)
-	for y in 0..<TILES_H do for x in 0..<TILES_W {
+	canvas := swin.texture_make(TILES_W * TILE_SIZE, TILES_H * TILE_SIZE)
+	background := swin.texture_make((TILES_W + 1) * TILE_SIZE, (TILES_H + 1) * TILE_SIZE)
+	for y in 0..=TILES_H do for x in 0..=TILES_W {
 		swin.draw_from_texture(&background, atlas, x * TILE_SIZE, y * TILE_SIZE, sprites[.Grass])
 	}
 
@@ -621,23 +649,25 @@ render :: proc(window: ^swin.Window) {
 		start_tick := time.tick_now()
 
 		client_w, client_h := get_2_ints(&global_state.client_size)
-		tw := int(math.ceil(f32(client_w) / TILE_SIZE))
-		th := int(math.ceil(f32(client_h) / TILE_SIZE))
+		/*
+		tw := int(math.ceil(f32(client_w) / TILE_SIZE)) + 1
+		th := int(math.ceil(f32(client_h) / TILE_SIZE)) + 1
 
 		if tw * TILE_SIZE != background.w || th * TILE_SIZE != background.h {
 			swin.texture_destroy(background)
-			background = swin.texture_make(tw * TILE_SIZE, th*TILE_SIZE)
-			for y in 0..<th do for x in 0..<tw {
-				swin.draw_from_texture(&background, atlas, x*TILE_SIZE, y*TILE_SIZE, sprites[.Grass])
+			background = swin.texture_make(tw * TILE_SIZE, th * TILE_SIZE)
+			for y in 0..=th do for x in 0..=tw {
+				swin.draw_from_texture(&background, atlas, x * TILE_SIZE, y * TILE_SIZE, sprites[.Grass])
 			}
 		}
+		*/
 
 		if sync.atomic_load(&world.updated) {
 			sync.guard(&world.lock)
 
 			// save the world state
 			menu = world.menu
-			level = world.level
+			copy_level(&level, world.level)
 			draw_player = world.player
 			previous_tick = global_state.previous_tick
 			tick_time = sync.atomic_load(&global_state.tick_time)
@@ -655,35 +685,38 @@ render :: proc(window: ^swin.Window) {
 			slice.fill(canvas.pixels, clear_color)
 
 			player_pos := interpolate_tile_position(time.tick_diff(previous_tick, time.tick_now()), tick_time, draw_player)
-			offset_into_level, offset_around_level: [2]f32
+			draw_background: bool
+			diff, offset: [2]f32
+			diff = {f32(TILES_W - level.w), f32(TILES_H - level.h)}
 
-			if level.w < TILES_W {
-				offset_around_level.x = f32(TILES_W - level.w)/2
+			if diff.x > 0 {
+				offset.x = diff.x / 2
+				draw_background = true
 			} else {
-				offset_into_level.x = f32(player_pos.x) - f32(TILES_W)/2
-				offset_right := f32(level.w) - TILES_W - offset_into_level.x
-				if offset_right < 0 {
-					offset_into_level.x += offset_right
+				off := (f32(TILES_W) / 2) - f32(player_pos.x)
+				if diff.x > off {
+					offset.x = diff.x
 				} else {
-					offset_into_level.x = max(offset_into_level.x, 0)
-				}
-			}
-			if level.h < TILES_H {
-				offset_around_level.y = f32(TILES_H - level.h)/2
-			} else {
-				offset_into_level.y = f32(player_pos.y) - f32(TILES_H)/2
-				offset_bottom := f32(level.h) - TILES_H - offset_into_level.y
-				if offset_bottom < 0 {
-					offset_into_level.y += offset_bottom
-				} else {
-					offset_into_level.y = max(offset_into_level.y, 0)
+					offset.x = min(off, 0)
 				}
 			}
 
-			if offset_around_level.x > 0 || offset_around_level.y > 0 {
-				off_x := int((offset_around_level.x + offset_into_level.x) * TILE_SIZE)
-				off_y := int((offset_around_level.y + offset_into_level.y) * TILE_SIZE)
-				swin.draw_from_texture(&canvas, background, -off_x, -off_y, {0, 0, background.w, background.h})
+			if diff.y > 0 {
+				offset.y = diff.y / 2
+				draw_background = true
+			} else {
+				off := (f32(TILES_H) / 2) - f32(player_pos.y)
+				if diff.y > off {
+					offset.y = diff.y
+				} else {
+					offset.y = min(off, 0)
+				}
+			}
+
+			if draw_background {
+				off_x := int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
+				off_y := int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
+				swin.draw_from_texture(&canvas, background, 0, 0, {off_x, off_y, background.w - off_x, background.h - off_y})
 			}
 
 			for tile, idx in level.tiles {
@@ -694,17 +727,17 @@ render :: proc(window: ^swin.Window) {
 				#partial switch tile {
 				case .Grass:
 					d: bit_set[Direction]
-					if get_level_tile({x - 1, y}) != .Grass do d += {.Left}
-					if get_level_tile({x + 1, y}) != .Grass do d += {.Right}
-					if get_level_tile({x, y - 1}) != .Grass do d += {.Up}
-					if get_level_tile({x, y + 1}) != .Grass do d += {.Down}
+					if get_level_tile(level, {x - 1, y}) != .Grass do d += {.Left}
+					if get_level_tile(level, {x + 1, y}) != .Grass do d += {.Right}
+					if get_level_tile(level, {x, y - 1}) != .Grass do d += {.Up}
+					if get_level_tile(level, {x, y + 1}) != .Grass do d += {.Down}
 					sprite = sprites[grass_sprites[d] or_else .Grass]
 				case .Fence:
 					d: bit_set[Direction]
-					if get_level_tile({x - 1, y}) == .Fence do d += {.Left}
-					if get_level_tile({x + 1, y}) == .Fence do d += {.Right}
-					//if get_level_tile({x, y - 1}) == .Fence do d += {.Up}
-					if get_level_tile({x, y + 1}) == .Fence do d += {.Down}
+					if get_level_tile(level, {x - 1, y}) == .Fence do d += {.Left}
+					if get_level_tile(level, {x + 1, y}) == .Fence do d += {.Right}
+					//if get_level_tile(level, {x, y - 1}) == .Fence do d += {.Up}
+					if get_level_tile(level, {x, y + 1}) == .Fence do d += {.Down}
 					sprite = sprites[fence_sprites[d] or_else .Fence_Down]
 				case .End:
 					if level.end {
@@ -721,13 +754,14 @@ render :: proc(window: ^swin.Window) {
 				case .Trap_Activated: sprite = sprites[.Trap_Activated]
 				}
 
-				px := offset_around_level.x - offset_into_level.x + f32(x)
-				py := offset_around_level.y - offset_into_level.y + f32(y)
-				swin.draw_from_texture(&canvas, atlas, int(px * TILE_SIZE), int(py * TILE_SIZE), sprite)
+				px := (x * TILE_SIZE) + int(offset.x * TILE_SIZE)
+				py := (y * TILE_SIZE) + int(offset.y * TILE_SIZE)
+				swin.draw_from_texture(&canvas, atlas, px, py, sprite)
 			}
 
-			px := int((player_pos.x + offset_around_level.x - offset_into_level.x) * TILE_SIZE) + draw_player.sprite.origin.x
-			py := int((player_pos.y + offset_around_level.y - offset_into_level.y) * TILE_SIZE) + draw_player.sprite.origin.y
+			pos := (player_pos + offset) * TILE_SIZE
+			px := int(pos.x) + draw_player.sprite.origin.x
+			py := int(pos.y) + draw_player.sprite.origin.y
 			swin.draw_from_texture(&canvas, atlas, px, py, draw_player.sprite)
 		}
 
@@ -750,7 +784,7 @@ render :: proc(window: ^swin.Window) {
 
 can_move :: proc(pos: [2]int, d: Direction, belt: bool) -> bool {
 	pos := pos
-	current_tile := get_level_tile(pos)
+	current_tile := get_level_tile(world.level, pos)
 
 	#partial switch d {
 	case .Right:
@@ -774,7 +808,7 @@ can_move :: proc(pos: [2]int, d: Direction, belt: bool) -> bool {
 		}
 		pos.y -= 1
 	}
-	tile := get_level_tile(pos)
+	tile := get_level_tile(world.level, pos)
 
 	if tile == .Grass || tile == .Fence {
 		return false
@@ -821,20 +855,22 @@ move_player :: #force_inline proc(d: Direction) {
 	}
 }
 
-get_level_tile :: #force_inline proc(pos: [2]int) -> Tiles {
-	if pos.y < 0 || pos.y >= world.level.h || pos.x < 0 || pos.x >= world.level.w {
+get_level_tile :: #force_inline proc(level: Level, pos: [2]int) -> Tiles #no_bounds_check {
+	if pos.y < 0 || pos.y >= level.h || pos.x < 0 || pos.x >= level.w {
 		return .Grass
 	}
 
-	return world.level.tiles[(pos.y * world.level.w) + pos.x]
+	return level.tiles[(pos.y * level.w) + pos.x]
 }
 
-set_level_tile :: #force_inline proc(pos: [2]int, t: Tiles) {
-	if pos.y < 0 || pos.y >= world.level.h || pos.x < 0 || pos.x >= world.level.w {
-		fmt.println("BUG", pos, t)
-		return
+set_level_tile :: #force_inline proc(level: ^Level, pos: [2]int, t: Tiles) {
+	when ODIN_DEBUG {
+		if pos.y < 0 || pos.y >= level.h || pos.x < 0 || pos.x >= level.w {
+			fmt.println("BUG", pos, t)
+			return
+		}
 	}
-	world.level.tiles[(pos.y * world.level.w) + pos.x] = t
+	level.tiles[(pos.y * level.w) + pos.x] = t
 }
 
 move_player_to_tile :: proc(d: Direction) {
@@ -845,12 +881,12 @@ move_player_to_tile :: proc(d: Direction) {
 	case .Down:  world.player.y += 1
 	case .Up:    world.player.y -= 1
 	}
-	original_tile := get_level_tile(original_pos)
-	current_tile := get_level_tile(world.player)
+	original_tile := get_level_tile(world.level, original_pos)
+	current_tile := get_level_tile(world.level, world.player)
 
 	#partial switch original_tile {
 	case .Trap:
-		set_level_tile(original_pos, .Trap_Activated)
+		set_level_tile(&world.level, original_pos, .Trap_Activated)
 	case .Belt_Right, .Belt_Left, .Belt_Down, .Belt_Up:
 		if current_tile != .Belt_Left && current_tile != .Belt_Right && current_tile != .Belt_Down && current_tile != .Belt_Up {
 			// if moved from belt unto anything else
@@ -860,7 +896,7 @@ move_player_to_tile :: proc(d: Direction) {
 
 	#partial switch current_tile {
 	case .Carrot:
-		set_level_tile(world.player, .Carrot_Hole)
+		set_level_tile(&world.level, world.player, .Carrot_Hole)
 		world.level.carrots -= 1
 		if world.level.carrots == 0 {
 			world.level.end = true
@@ -893,7 +929,7 @@ load_level :: proc(index: int) {
 		return
 	}
 
-	world.level.index = index
+	world.current_level = index
 	world.level.w = len(levels[index][0])
 	world.level.h = len(levels[index])
 	world.level.tiles = make([]Tiles, world.level.w * world.level.h)
@@ -916,7 +952,7 @@ load_level :: proc(index: int) {
 
 	for row, y in levels[index] do for char, x in row {
 		tile := char_to_tile[char] or_else .Ground
-		set_level_tile({x, y}, tile)
+		set_level_tile(&world.level, {x, y}, tile)
 		#partial switch tile {
 		case .Start:
 			world.player.pos = {x, y}
@@ -926,32 +962,38 @@ load_level :: proc(index: int) {
 	}
 }
 
-keyboard_handler :: proc(key: swin.Key_Code, released: bool) {
-	if world.menu {
-		if released {
-			#partial switch key {
-			case .Enter:
-				// TODO: load levels properly
-				load_level(len(levels)-1)
-				world.menu = false
-			case .F1:
-				load_level(0)
-				world.menu = false
-			}
-		}
-	} else {
+key_handler_menu :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+	if .Pressed in state {
 		#partial switch key {
-		case .Right: move_player(.Right)
-		case .Left:  move_player(.Left)
-		case .Down:  move_player(.Down)
-		case .Up:    move_player(.Up)
-		case .Escape:
-			if !world.menu {
-				world.menu = true
-			}
-		case .R: world.player.dying.state = true
-		case .F: world.player.fading.state = true
+		case .Enter:
+			// TODO: load levels properly
+			load_level(len(levels)-1)
+			world.menu = false
+		case .F1:
+			load_level(0)
+			world.menu = false
 		}
+	}
+	if .Held in state {
+		// TODO: volume slider?
+	}
+	if .Repeated in state {
+		// TODO: text input?
+	}
+}
+
+key_handler_game :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+	#partial switch key {
+	case .Right: move_player(.Right)
+	case .Left:  move_player(.Left)
+	case .Down:  move_player(.Down)
+	case .Up:    move_player(.Up)
+	case .Escape:
+		if .Pressed in state && !world.menu {
+			world.menu = true
+		}
+	case .R: world.player.dying.state = true
+	case .F: world.player.fading.state = true
 	}
 }
 
@@ -968,16 +1010,17 @@ get_belt_sprite :: proc(frame: uint, t: Tiles) -> Sprite {
 	return sprite
 }
 
-player_set_walking_sprite :: proc(frame: uint) {
-	world.player.sprite = walking_animation[frame]
+get_walking_sprite :: proc(frame: uint) -> Sprite {
+	sprite := walking_animation[frame]
 	#partial switch world.player.direction {
 	case .Left:
-		world.player.sprite.y += 25
+		sprite.y += 25
 	case .Up:
-		world.player.sprite.y += 50
+		sprite.y += 50
 	case .Right:
-		world.player.sprite.y += 75
+		sprite.y += 75
 	}
+	return sprite
 }
 
 update_world :: proc(t: ^thread.Thread) {
@@ -990,12 +1033,18 @@ update_world :: proc(t: ^thread.Thread) {
 			world.player.position.prev = world.player.position.pos
 			{ // keyboard inputs
 				// NOTE: this input processor squashes multiple key presses in-between frames into a single keypress
-				sync.guard(&global_state.key_data_lock)
-				for data, key in &global_state.key_data {
-					if data == 0 do continue
+				sync.guard(&global_state.frame_inputs.lock)
+				for state, key in &global_state.frame_inputs.keys {
+					if state == {} do continue
 
-					keyboard_handler(key, data == 2)
-					if data == 2 do data = 0
+					if world.menu {
+						key_handler_menu(key, state)
+					} else {
+						key_handler_game(key, state)
+					}
+					if .Pressed in state do state = {.Held}
+					if .Repeated in state do state -= {.Repeated}
+					if .Released in state do state = {}
 				}
 			}
 
@@ -1003,6 +1052,36 @@ update_world :: proc(t: ^thread.Thread) {
 			} else {
 				// animations
 				switch {
+				case world.player.fading.state:
+					world.player.fading.timer += 1
+
+					if world.player.fading.timer % world.player.fading.frame_len == 0 {
+						world.player.fading.frame += 1
+					}
+					if world.player.fading.frame >= len(fading_animation) {
+						world.player.fading.state = false
+						world.player.fading.timer = 0
+						world.player.fading.frame = 0
+						load_level(world.current_level + 1)
+					} else {
+						world.player.sprite = fading_animation[world.player.fading.frame]
+					}
+				case world.player.dying.state:
+					world.player.dying.timer += 1
+
+					if world.player.dying.timer % world.player.dying.frame_len == 0 {
+						world.player.dying.frame += 1
+					}
+					if world.player.dying.frame >= len(dying_animation) {
+						if world.player.dying.timer - (len(dying_animation) * world.player.dying.frame_len) >= LAYING_DEAD_TIME {
+							world.player.dying.state = false
+							world.player.dying.timer = 0
+							world.player.dying.frame = 0
+							load_level(world.current_level)
+						}
+					} else {
+						world.player.sprite = dying_animation[world.player.dying.frame]
+					}
 				case world.player.walking.state:
 					world.player.idle.state = false
 					world.player.idle.timer = 0
@@ -1023,40 +1102,10 @@ update_world :: proc(t: ^thread.Thread) {
 						move_player_to_tile(world.player.direction)
 					} else {
 						if world.player.belt {
-							player_set_walking_sprite(0)
+							world.player.sprite = get_walking_sprite(0)
 						} else {
-							player_set_walking_sprite(world.player.walking.frame + 1)
+							world.player.sprite = get_walking_sprite(world.player.walking.frame + 1)
 						}
-					}
-				case world.player.dying.state:
-					world.player.dying.timer += 1
-
-					if world.player.dying.timer % world.player.dying.frame_len == 0 {
-						world.player.dying.frame += 1
-					}
-					if world.player.dying.frame >= len(dying_animation) {
-						if world.player.dying.timer - (len(dying_animation) * world.player.dying.frame_len) >= LAYING_DEAD_TIME {
-							world.player.dying.state = false
-							world.player.dying.timer = 0
-							world.player.dying.frame = 0
-							load_level(world.level.index)
-						}
-					} else {
-						world.player.sprite = dying_animation[world.player.dying.frame]
-					}
-				case world.player.fading.state:
-					world.player.fading.timer += 1
-
-					if world.player.fading.timer % world.player.fading.frame_len == 0 {
-						world.player.fading.frame += 1
-					}
-					if world.player.fading.frame >= len(fading_animation) {
-						world.player.fading.state = false
-						world.player.fading.timer = 0
-						world.player.fading.frame = 0
-						load_level(world.level.index + 1)
-					} else {
-						world.player.sprite = fading_animation[world.player.fading.frame]
 					}
 				case world.player.idle.state:
 					world.player.idle.timer += 1
@@ -1066,7 +1115,7 @@ update_world :: proc(t: ^thread.Thread) {
 					}
 					world.player.sprite = idling_animation[world.player.idle.frame]
 				case:
-					player_set_walking_sprite(0)
+					world.player.sprite = get_walking_sprite(0)
 					world.player.idle.timer += 1
 					if world.player.idle.timer > IDLING_TIME {
 						world.player.idle.timer = 0
@@ -1082,7 +1131,7 @@ update_world :: proc(t: ^thread.Thread) {
 
 				// belts
 				if world.player.belt {
-					tile := get_level_tile(world.player)
+					tile := get_level_tile(world.level, world.player)
 					#partial switch tile {
 					case .Belt_Left:  move_player(.Left)
 					case .Belt_Right: move_player(.Right)
@@ -1111,14 +1160,13 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 			window.must_close = false
 		}
 	case swin.Focus_Event:
-		if ev.focused {
-			settings.tps = default_settings.tps
-		} else {
-			settings.tps = 3
-			sync.guard(&global_state.key_data_lock)
-			for key in &global_state.key_data {
+		if !ev.focused {
+			sync.guard(&global_state.frame_inputs.lock)
+			for state in &global_state.frame_inputs.keys {
 				// release all pressed keys
-				if key == 1 do key = 2
+				if .Pressed in state || .Held in state || .Repeated in state {
+					state = {.Released}
+				}
 			}
 		}
 	case swin.Draw_Event:
@@ -1128,7 +1176,7 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 	case swin.Character_Event:
 	case swin.Keyboard_Event:
 		switch ev.state {
-		case .Repeat, .Released:
+		case .Repeated, .Released:
 		case .Pressed:
 			#partial switch ev.key {
 			case .Q: window.must_close = true
@@ -1145,9 +1193,15 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 			}
 		}
 
-		if ev.state == .Released || ev.state == .Pressed {
-			sync.guard(&global_state.key_data_lock)
-			global_state.key_data[ev.key] = 1 if ev.state == .Pressed else 2
+		{
+			sync.guard(&global_state.frame_inputs.lock)
+			state := global_state.frame_inputs.keys[ev.key]
+			switch ev.state {
+			case .Released: state += {.Released}
+			case .Repeated: state += {.Repeated}
+			case .Pressed:  state += {.Pressed}
+			}
+			global_state.frame_inputs.keys[ev.key] = state
 		}
 	case swin.Mouse_Button_Event:
 	case swin.Mouse_Move_Event:

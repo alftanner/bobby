@@ -1,8 +1,6 @@
 //+private
 package simple_window
 
-import "core:image"
-import "core:thread"
 import "core:runtime"
 import win32 "core:sys/windows"
 

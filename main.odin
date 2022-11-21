@@ -2,7 +2,6 @@ package main
 
 import "core:os"
 import "core:mem"
-import "core:mem/virtual"
 import "core:fmt"
 import "core:time"
 import "core:runtime"

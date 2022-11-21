@@ -9,9 +9,9 @@ Mouse_Button :: enum {
 }
 
 Key_State :: enum {
-	Pressed,
 	Released,
-	Repeat,
+	Pressed,
+	Repeated,
 }
 
 Key_Code :: enum {

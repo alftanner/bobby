@@ -47,7 +47,6 @@ color :: proc(r, g, b, a: u8) -> Color {
 		return {r, g, b, a}
 	}
 }
-
 // draw every pixel by blending
 draw_from_texture :: proc(dst: ^Texture2D, src: Texture2D, startx, starty: int, src_rect: Rect, flip: Flip = .None) {
 	endx := min(startx + src_rect.w, dst.w)

@@ -146,7 +146,7 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 		alt_was_down := (lparam & (1 << 29)) != 0
 
 		if was_pressed && was_released {
-			state = .Repeat
+			state = .Repeated
 		} else if was_released {
 			state = .Released
 		} else {
