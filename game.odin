@@ -319,6 +319,12 @@ char_to_tile: map[rune]Tiles = {
 	'r' = .Belt_Right,
 	'u' = .Belt_Up,
 	'd' = .Belt_Down,
+	'|' = .Wall_Left_Right,
+	'_' = .Wall_Up_Down,
+	']' = .Wall_Right_Up,
+	'[' = .Wall_Left_Down,
+	'「' = .Wall_Left_Up,
+	'」' = .Wall_Right_Down,
 }
 
 levels: [][]string = {
@@ -487,6 +493,66 @@ levels: [][]string = {
 		"...... s ......",
 		"......ccc......",
 		"...............",
+	},
+	{
+		"................",
+		"........ccc.....",
+		"..  ....ccc   ..",
+		".. tll  ccc.. ..",
+		"..  ..u..d... ..",
+		"..  ..u..d... ..",
+		".  trr tccc..tt.",
+		".s  ----ccc..te.",
+		".  tll tccc..tt.",
+		"..  ......... ..",
+		"..  ......... ..",
+		".. trrt ccc.. ..",
+		"..  ... ccc.. ..",
+		"....... ccc   ..",
+		"........ccc.....",
+		"................",
+	},
+	{
+		".............",
+		"...... ccc ..",
+		"...... ... ..",
+		"...... ... ..",
+		".   .. ..   .",
+		". s tc|ct e .",
+		".   .. ..   .",
+		".. ... ......",
+		".. ... ......",
+		".. ccc ......",
+		".............",
+	},
+	{
+		".............",
+		"......tccct..",
+		"...... ... ..",
+		"...... ... ..",
+		".. ccc]ccc ..",
+		".. ... ... ..",
+		".. ... ... ..",
+		".   .. ..   .",
+		". s tc|ct e .",
+		".   .. ..   .",
+		".. ... ... ..",
+		".. ... ... ..",
+		".. ccc[ccc ..",
+		".............",
+	},
+	{
+		"................",
+		"......    ..ccc.",
+		"......   ]  ccc.",
+		".   .. .. ..ccc.",
+		". s   ].. ...d..",
+		".   .....      .",
+		".........  |.| .",
+		"....   ..  [c[ .",
+		".... e     |.| .",
+		"....   ..      .",
+		"................",
 	},
 }
 
@@ -752,6 +818,12 @@ render :: proc(window: ^swin.Window) {
 				case .Carrot_Hole: sprite = sprites[.Carrot_Hole]
 				case .Trap: sprite = sprites[.Trap]
 				case .Trap_Activated: sprite = sprites[.Trap_Activated]
+				case .Wall_Left_Right: sprite = sprites[.Wall_Left_Right]
+				case .Wall_Up_Down: sprite = sprites[.Wall_Up_Down]
+				case .Wall_Right_Up: sprite = sprites[.Wall_Right_Up]
+				case .Wall_Right_Down: sprite = sprites[.Wall_Right_Down]
+				case .Wall_Left_Up: sprite = sprites[.Wall_Left_Up]
+				case .Wall_Left_Down: sprite = sprites[.Wall_Left_Down]
 				}
 
 				px := (x * TILE_SIZE) + int(offset.x * TILE_SIZE)
@@ -814,16 +886,54 @@ can_move :: proc(pos: [2]int, d: Direction, belt: bool) -> bool {
 		return false
 	}
 
-	if d == .Right && tile == .Belt_Left {
+	if tile == .Belt_Left && d == .Right {
 		return false
 	}
-	if d == .Left && tile == .Belt_Right {
+	if tile == .Belt_Right && d == .Left {
 		return false
 	}
-	if d == .Down && tile == .Belt_Up {
+	if tile == .Belt_Up && d == .Down {
 		return false
 	}
-	if d == .Up && tile == .Belt_Down {
+	if tile == .Belt_Down && d == .Up {
+		return false
+	}
+
+	if tile == .Wall_Left_Right && d != .Up && d != .Down {
+		return false
+	}
+	if tile == .Wall_Up_Down && d != .Left && d != .Right {
+		return false
+	}
+	if tile == .Wall_Right_Up && d != .Right && d != .Up {
+		return false
+	}
+	if tile == .Wall_Right_Down && d != .Right && d != .Down {
+		return false
+	}
+	if tile == .Wall_Left_Up && d != .Left && d != .Up {
+		return false
+	}
+	if tile == .Wall_Left_Down && d != .Left && d != .Down {
+		return false
+	}
+
+	if current_tile == .Wall_Left_Right && (d == .Left || d == .Right) {
+		return false
+	}
+	if current_tile == .Wall_Up_Down && (d == .Up || d == .Down) {
+		return false
+	}
+	if current_tile == .Wall_Right_Up && (d == .Right || d == .Up) {
+		return false
+	}
+	if current_tile == .Wall_Right_Down && (d == .Right || d == .Down) {
+		return false
+	}
+	if current_tile == .Wall_Left_Up && (d == .Left || d == .Up) {
+		return false
+	}
+	if current_tile == .Wall_Left_Down && (d == .Left || d == .Down) {
 		return false
 	}
 
@@ -892,6 +1002,18 @@ move_player_to_tile :: proc(d: Direction) {
 			// if moved from belt unto anything else
 			world.player.belt = false
 		}
+	case .Wall_Left_Right:
+		set_level_tile(&world.level, original_pos, .Wall_Up_Down)
+	case .Wall_Up_Down:
+		set_level_tile(&world.level, original_pos, .Wall_Left_Right)
+	case .Wall_Right_Up:
+		set_level_tile(&world.level, original_pos, .Wall_Right_Down)
+	case .Wall_Left_Down:
+		set_level_tile(&world.level, original_pos, .Wall_Left_Up)
+	case .Wall_Right_Down:
+		set_level_tile(&world.level, original_pos, .Wall_Left_Down)
+	case .Wall_Left_Up:
+		set_level_tile(&world.level, original_pos, .Wall_Right_Up)
 	}
 
 	#partial switch current_tile {
