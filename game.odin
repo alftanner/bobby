@@ -7,6 +7,8 @@ import "core:sync"
 import "core:math"
 //import "core:math/ease"
 import "core:container/small_array"
+import "core:strconv"
+import "core:strings"
 import "core:image"
 import _ "core:image/png"
 import "core:bytes"
@@ -19,12 +21,13 @@ import swin "simple_window"
 SKY_BLUE: image.RGBA_Pixel : {139, 216, 245, 255}
 GAME_TITLE :: "Bobby Carrot Classic"
 
-GLYPH_W, GLYPH_H :: 5, 7
 Font :: struct {
 	using texture: swin.Texture2D,
-	table: map[rune]int,
+	table: map[rune][2]int,
+	glyph_size: struct{w, h: int},
 }
-font: Font
+debug_font: Font
+hud_font: Font
 atlas: swin.Texture2D
 
 Direction :: enum {
@@ -248,6 +251,24 @@ Sprites :: enum {
 
 sprites: [Sprites]Sprite
 
+HUD_Sprites :: enum {
+	Carrot,
+	Egg,
+	Eyes,
+	Silver_Key,
+	Golden_Key,
+	Bronze_Key,
+}
+
+hud_sprites: [HUD_Sprites]Sprite = {
+	.Carrot     = {{128, 80, 14, 13},{}},
+	.Egg        = {{142, 80, 9,  13},{}},
+	.Eyes       = {{151, 80, 15, 13},{}},
+	.Silver_Key = {{166, 80, 8,  13},{}},
+	.Golden_Key = {{174, 80, 8,  13},{}},
+	.Bronze_Key = {{182, 80, 8,  13},{}},
+}
+
 grass_sprites: map[bit_set[Direction]]Sprites = {
 	{.Right}                    = .Grass_Right,
 	{.Left}                     = .Grass_Left,
@@ -347,273 +368,6 @@ belt_animation := [?]Sprite {
 	{{48, 64, 16, 16},{}},
 }
 
-char_to_tile: map[rune]Tiles = {
-	'.' = .Grass,
-	' ' = .Ground,
-	's' = .Start,
-	'e' = .End,
-	'c' = .Carrot,
-	'-' = .Fence,
-	't' = .Trap,
-	'l' = .Belt_Left,
-	'r' = .Belt_Right,
-	'u' = .Belt_Up,
-	'd' = .Belt_Down,
-	'|' = .Wall_Left_Right,
-	'_' = .Wall_Up_Down,
-	']' = .Wall_Right_Up,
-	'[' = .Wall_Left_Down,
-	'「' = .Wall_Left_Up,
-	'」' = .Wall_Right_Down,
-	'B' = .Red_Button,
-	'b' = .Red_Button_Pressed,
-	'Y' = .Yellow_Button,
-	'y' = .Yellow_Button_Pressed,
-}
-
-levels: [][]string = {
-	{
-		".........",
-		"...   ...",
-		".   e   .",
-		". ----- .",
-		". -ccc- .",
-		". -ccc- .",
-		". -ccc- .",
-		". -- -- .",
-		".       .",
-		".   s   .",
-		"...   ...",
-		".........",
-	},
-	{
-		"...........",
-		"....   ....",
-		".... e ....",
-		".         .",
-		". ---t--- .",
-		". -ccccc- .",
-		". -c c c- .",
-		". -ccccc- .",
-		". ---t--- .",
-		".         .",
-		"....   ....",
-		".... s ....",
-		"....   ....",
-		"...........",
-	},
-	{
-		".........",
-		".... ....",
-		"... e ...",
-		".       .",
-		".... ....",
-		"..cctcc..",
-		"..cctcc..",
-		"..cctcc..",
-		".... ....",
-		".... ....",
-		"...   ...",
-		"... s ...",
-		"...   ...",
-		".........",
-	},
-	{
-		"..............",
-		"..  ---------.",
-		"..  -ccc-ccc-.",
-		"..  tccctccc-.",
-		"..  -ccc-ccc-.",
-		"..  ------t--.",
-		".   -ccc-ccc-.",
-		". s tcectccc-.",
-		".   -ccc-ccc-.",
-		"..  ---------.",
-		"..............",
-	},
-	{
-		"...............",
-		"....... .......",
-		"...... e ......",
-		".t           t.",
-		".c.....t.....c.",
-		".c.....c.....c.",
-		".c...cctcc...c.",
-		".t   cc.cc   t.",
-		".....cctcc.....",
-		"....... .......",
-		"....... .......",
-		"......   ......",
-		"...... s ......",
-		"......   ......",
-		"...............",
-	},
-	{
-		"...............",
-		"........   ....",
-		"..c  t   e ....",
-		".. .....   ....",
-		"..t......t.....",
-		".. ..cc     cc.",
-		"..c  cc --- cc.",
-		".....cc     cc.",
-		".......t...t...",
-		".......ctttc...",
-		".......t...t...",
-		".   ..  ccc  ..",
-		". s     ctc  ..",
-		".   ..  ccc  ..",
-		"...............",
-	},
-	{
-		"...............",
-		".ccc..ccc..ccc.",
-		".cc tt c tt cc.",
-		".c  ..   ..  c.",
-		"..t....t....t..",
-		"..t....t....t..",
-		".c  ..   ..  c.",
-		".cc tt e tt cc.",
-		".c  ..   ..  c.",
-		"..t....t....t..",
-		"..t....t....t..",
-		".   ..   ..  c.",
-		". s tt c tt cc.",
-		".   ..ccc..ccc.",
-		"...............",
-	},
-	{
-		"..............",
-		".   ..  ......",
-		". e rr  tctct.",
-		".   ..  .tc.c.",
-		".   ..  .ctct.",
-		". s ll  ttct..",
-		".   ..  ..tc..",
-		"..............",
-	},
-	{
-		"...........",
-		".ccc...ccc.",
-		".cscrrrccc.",
-		".ccc...ccc.",
-		"..d..... ..",
-		"..d..... ..",
-		".   ...ccc.",
-		". e tctccc.",
-		".   ...ccc.",
-		"...........",
-	},
-	{
-		".........",
-		"..  e  ..",
-		"..     ..",
-		"..t-t-t..",
-		".cc-c-cc.",
-		".cc-d-cc.",
-		".cc-c-cc.",
-		".t--t--t.",
-		".       .",
-		"....u....",
-		"....u....",
-		"...   ...",
-		"... s ...",
-		"...ccc...",
-		".........",
-	},
-	{
-		"...............",
-		"....cc e cc....",
-		"....--- ---....",
-		".t           t.",
-		".c...t-t-t...c.",
-		".clllc-c-clllc.",
-		".c...--t--...c.",
-		".t           t.",
-		".....     .....",
-		".......u.......",
-		".......u.......",
-		"......   ......",
-		"...... s ......",
-		"......ccc......",
-		"...............",
-	},
-	{
-		"................",
-		"........ccc.....",
-		"..  ....ccc   ..",
-		".. tll  ccc.. ..",
-		"..  ..u..d... ..",
-		"..  ..u..d... ..",
-		".  trr tccc..tt.",
-		".s  ----ccc..te.",
-		".  tll tccc..tt.",
-		"..  ......... ..",
-		"..  ......... ..",
-		".. trrt ccc.. ..",
-		"..  ... ccc.. ..",
-		"....... ccc   ..",
-		"........ccc.....",
-		"................",
-	},
-	{
-		".............",
-		"...... ccc ..",
-		"...... ... ..",
-		"...... ... ..",
-		".   .. ..   .",
-		". s tc|ct e .",
-		".   .. ..   .",
-		".. ... ......",
-		".. ... ......",
-		".. ccc ......",
-		".............",
-	},
-	{
-		".............",
-		"......tccct..",
-		"...... ... ..",
-		"...... ... ..",
-		".. ccc]ccc ..",
-		".. ... ... ..",
-		".. ... ... ..",
-		".   .. ..   .",
-		". s tc|ct e .",
-		".   .. ..   .",
-		".. ... ... ..",
-		".. ... ... ..",
-		".. ccc[ccc ..",
-		".............",
-	},
-	{
-		"................",
-		"......    ..ccc.",
-		"......   ]  ccc.",
-		".   .. .. ..ccc.",
-		". s   ].. ...d..",
-		".   .....      .",
-		".........  |.| .",
-		"....   ..  [c[ .",
-		".... e     |.| .",
-		"....   ..      .",
-		"................",
-	},
-	{
-		"................",
-		".-----......y...",
-		".-ccc Y.       .",
-		".-ccc .. ---d--.",
-		".-ccc ll tly  -.",
-		".-    ..u-cccc-.",
-		".--_--..u-cccc-.",
-		".     ..u-cccc-.",
-		". s B ll -Y   -.",
-		".     ..y------.",
-		".. e ...........",
-		"................",
-	},
-}
-
 save_2_ints :: #force_inline proc(p: ^i64, a, b: i32) {
 	sync.atomic_store(p, transmute(i64)[2]i32{a, b})
 }
@@ -645,28 +399,55 @@ pixel_mod :: proc(dst: image.RGBA_Pixel, mod: image.RGB_Pixel) -> (pixel: image.
 	return
 }
 
-draw_text :: proc(canvas: ^swin.Texture2D, text: string, px, py: ^int) -> (w, h: int) {
-	ox := px^
+draw_text :: proc(canvas: ^swin.Texture2D, font: Font, text: string, pos: [2]int, rtl := false) -> (region: swin.Rect) {
+	pos := pos
+	region.x = pos.x
+	region.y = pos.y
 
+	if rtl {
+		region.w = pos.x
+		text_rev := strings.reverse(text, context.temp_allocator)
+		for ch in text_rev {
+			if ch == '\n' {
+				pos.x = region.x
+				pos.y += font.glyph_size.h + 1
+				continue
+			}
+
+			glyph_pos := font.table[ch] or_else font.table['?']
+			swin.draw_from_texture(canvas, font.texture, pos.x - font.glyph_size.w, pos.y, {glyph_pos.x, glyph_pos.y, font.glyph_size.w, font.glyph_size.h})
+
+			pos.x -= font.glyph_size.w + 1
+			region.w = min(region.w, pos.x)
+		}
+		region.h = pos.y + font.glyph_size.h
+
+		x := region.w
+		w := region.x - region.w
+		region.x = x
+		region.w = w
+
+		return
+	}
+
+	// ltr
 	for ch in text {
-		w = max(w, px^)
+		region.w = max(region.w, pos.x)
 
 		if ch == '\n' {
-			px^ = ox
-			py^ += GLYPH_H + 1
+			pos.x = region.x
+			pos.y += font.glyph_size.h + 1
 			continue
 		}
 
-		glyph_idx := font.table[ch] or_else font.table['?']
-		gx := (glyph_idx % (font.w / GLYPH_W)) * GLYPH_W
-		gy := (glyph_idx / (font.w / GLYPH_W)) * GLYPH_H
+		glyph_pos := font.table[ch] or_else font.table['?']
+		swin.draw_from_texture(canvas, font.texture, pos.x, pos.y, {glyph_pos.x, glyph_pos.y, font.glyph_size.w, font.glyph_size.h})
 
-		swin.draw_from_texture(canvas, font.texture, px^, py^, {gx, gy, GLYPH_W, GLYPH_H})
-
-		px^ += GLYPH_W + 1
+		pos.x += font.glyph_size.w + 1
 	}
+	region.h = pos.y + font.glyph_size.h
 
-	return w, py^ + GLYPH_H
+	return
 }
 
 draw_stats :: proc(canvas: ^swin.Texture2D) -> swin.Rect {
@@ -692,7 +473,6 @@ draw_stats :: proc(canvas: ^swin.Texture2D) -> swin.Rect {
 	}
 
 	tbuf: [256]byte
-	x, y: int = 1, 1
 	text := fmt.bprintf(
 		tbuf[:],
 `{}FPS{} {}ms last
@@ -701,9 +481,7 @@ draw_stats :: proc(canvas: ^swin.Texture2D) -> swin.Rect {
 		u32(math.round(tps.average)), lastu.average,
 	)
 
-	region: swin.Rect = {x, y, 0, 0}
-	region.w, region.h = draw_text(canvas, text, &x, &y)
-	return region
+	return draw_text(canvas, debug_font, text, {1, 1})
 }
 
 interpolate_tile_position :: #force_inline proc(frame_pos, tick_time: time.Duration, p: Player) -> [2]f32 {
@@ -735,12 +513,10 @@ interpolate_smooth_position :: #force_inline proc(frame_pos, tick_time: time.Dur
 
 /*
 TODO:
-allow resizing, scale buffer appropriately, fill free space with background grass
-display carrots left
-keys
-menu
+display keys
 show level end screen
 show game end screen
+menu
 */
 
 copy_level :: proc(dst: ^Level, src: Level) {
@@ -857,6 +633,7 @@ render :: proc(window: ^swin.Window) {
 	level_texture: swin.Texture2D
 	tiles_updated: Position_Queue
 	canvas_cache: Region_Cache
+	carrots: int
 
 	canvas := swin.texture_make(TILES_W * TILE_SIZE, TILES_H * TILE_SIZE)
 	background := swin.texture_make((TILES_W + 1) * TILE_SIZE, (TILES_H + 1) * TILE_SIZE)
@@ -896,6 +673,7 @@ render :: proc(window: ^swin.Window) {
 			draw_level_incrementally(&level_texture, &tiles_updated)
 			diff = {f32(TILES_W - world.level.w), f32(TILES_H - world.level.h)}
 			draw_player = world.player
+			carrots = world.level.carrots
 			previous_tick = global_state.previous_tick
 			tick_time = sync.atomic_load(&global_state.tick_time)
 
@@ -954,6 +732,8 @@ render :: proc(window: ^swin.Window) {
 			lvl_region: swin.Rect = {int(offset.x * TILE_SIZE), int(offset.y * TILE_SIZE), lvl_rect.w, lvl_rect.h}
 
 			if redraw_level { // full redraw
+				small_array.clear(&canvas_cache)
+				small_array.clear(&tiles_updated)
 				if draw_background {
 					swin.draw_from_texture(&canvas, background, bg_region.x, bg_region.y, bg_rect)
 				}
@@ -980,16 +760,32 @@ render :: proc(window: ^swin.Window) {
 				}
 			}
 
+			// draw player
 			pos := (player_pos + offset) * TILE_SIZE
 			px := int(pos.x) + draw_player.sprite.origin.x
 			py := int(pos.y) + draw_player.sprite.origin.y
 			swin.draw_from_texture(&canvas, atlas, px, py, draw_player.sprite)
 			small_array.push_back(&canvas_cache, swin.Rect{px, py, draw_player.sprite.w, draw_player.sprite.h})
+
+			// draw HUD
+			{
+				x := canvas.w
+				x -= 2
+
+				carrot_sprite := hud_sprites[.Carrot]
+				x -= carrot_sprite.w
+				swin.draw_from_texture(&canvas, atlas, x, 2, carrot_sprite)
+				small_array.push_back(&canvas_cache, swin.Rect{x, 2, carrot_sprite.w, carrot_sprite.h})
+				x -= 2
+
+				tbuf: [8]byte
+				carrots_str := strconv.itoa(tbuf[:], carrots)
+				small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, carrots_str, {x, 5}, true))
+			}
 		}
 
 		if settings.show_stats {
-			region := draw_stats(&canvas)
-			small_array.push_back(&canvas_cache, region)
+			small_array.push_back(&canvas_cache, draw_stats(&canvas))
 		}
 
 		sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
@@ -1540,12 +1336,27 @@ load_texture :: proc(data: []byte, $layout: typeid) -> (t: swin.Texture2D) {
 }
 
 load_resources :: proc() {
-	atlas = load_texture(#load("res/atlas.png"), image.RGBA_Pixel)
-	font.texture = load_texture(#load("res/font.png"), image.RGBA_Pixel)
-
-	font.table = make(map[rune]int)
+	debug_font.texture = load_texture(#load("res/font.png"), image.RGBA_Pixel)
+	debug_font.glyph_size = {5, 7}
+	debug_font.table = make(map[rune][2]int)
 	for ch in ` 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ?'".,:;~!@#$^&_|\/%*+-=<>()[]{}` {
-		font.table[ch] = len(font.table)
+		glyph_idx := len(debug_font.table)
+		gx := (glyph_idx % (debug_font.w / debug_font.glyph_size.w)) * debug_font.glyph_size.w
+		gy := (glyph_idx / (debug_font.w / debug_font.glyph_size.w)) * debug_font.glyph_size.h
+		debug_font.table[ch] = {gx, gy}
+	}
+
+	atlas = load_texture(#load("res/atlas.png"), image.RGBA_Pixel)
+
+	hud_font.texture = atlas
+	hud_font.glyph_size = {5, 8}
+	hud_font.table = make(map[rune][2]int)
+	for ch in `0123456789:` {
+		OFFSET: [2]int : {128, 106}
+		glyph_idx := len(hud_font.table)
+		gx := OFFSET.x + (glyph_idx * hud_font.glyph_size.w)
+		gy := OFFSET.y
+		hud_font.table[ch] = {gx, gy}
 	}
 
 	MAX_X :: 12
@@ -1559,8 +1370,10 @@ load_resources :: proc() {
 
 free_resources :: proc() {
 	swin.texture_destroy(&atlas)
-	swin.texture_destroy(&font.texture)
-	delete(font.table)
+	swin.texture_destroy(&debug_font.texture)
+	delete(debug_font.table)
+	// NOTE: hud_font uses the same texture as atlas so no need to free it
+	delete(hud_font.table)
 }
 
 _main :: proc() {
