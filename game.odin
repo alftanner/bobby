@@ -95,6 +95,7 @@ Player :: struct {
 	fading: Animation,
 
 	belt: bool,
+	key, golden_key, bronze_key: bool,
 }
 
 Level :: struct {
@@ -171,8 +172,8 @@ Tiles :: enum {
 	Belt_Right,
 	Belt_Up,
 	Belt_Down,
-	Silver_Key,
-	Silver_Lock,
+	Key,
+	Lock,
 	Golden_Key,
 	Golden_Lock,
 	Bronze_Key,
@@ -236,8 +237,8 @@ Sprites :: enum {
 	Belt_Right,
 	Belt_Up,
 	Belt_Down,
-	Silver_Key,
-	Silver_Lock,
+	Key,
+	Lock,
 	Golden_Key,
 	Golden_Lock,
 	Bronze_Key,
@@ -255,7 +256,7 @@ HUD_Sprites :: enum {
 	Carrot,
 	Egg,
 	Eyes,
-	Silver_Key,
+	Key,
 	Golden_Key,
 	Bronze_Key,
 }
@@ -264,7 +265,7 @@ hud_sprites: [HUD_Sprites]Sprite = {
 	.Carrot     = {{128, 80, 14, 13},{}},
 	.Egg        = {{142, 80, 9,  13},{}},
 	.Eyes       = {{151, 80, 15, 13},{}},
-	.Silver_Key = {{166, 80, 8,  13},{}},
+	.Key        = {{166, 80, 8,  13},{}},
 	.Golden_Key = {{174, 80, 8,  13},{}},
 	.Bronze_Key = {{182, 80, 8,  13},{}},
 }
@@ -321,14 +322,13 @@ idling_animation := [?]Sprite {
 
 walking_animation := [?]Sprite {
 	{{54,  121, 18, 25}, {-1, -9}},
-	{{0,   121, 18, 25}, {-1, -9}},
-	{{18,  121, 18, 25}, {-1, -9}},
-	{{36,  121, 18, 25}, {-1, -9}},
-	{{54,  121, 18, 25}, {-1, -9}},
 	{{72,  121, 18, 25}, {-1, -9}},
 	{{90,  121, 18, 25}, {-1, -9}},
 	{{108, 121, 18, 25}, {-1, -9}},
 	{{126, 121, 18, 25}, {-1, -9}},
+	{{0,   121, 18, 25}, {-1, -9}},
+	{{18,  121, 18, 25}, {-1, -9}},
+	{{36,  121, 18, 25}, {-1, -9}},
 }
 
 dying_animation := [?]Sprite {
@@ -486,7 +486,7 @@ draw_stats :: proc(canvas: ^swin.Texture2D) -> swin.Rect {
 
 interpolate_tile_position :: #force_inline proc(frame_pos, tick_time: time.Duration, p: Player) -> [2]f32 {
 	if p.walking.state {
-		frame_len := 1/f32(world.player.walking.frame_len * (len(walking_animation) - 1))
+		frame_len := 1/f32(world.player.walking.frame_len * len(walking_animation))
 		pos := f32(p.walking.timer) * frame_len
 		frame_delta := f32(frame_pos) * (frame_len/f32(tick_time))
 		delta := pos + frame_delta
@@ -513,7 +513,6 @@ interpolate_smooth_position :: #force_inline proc(frame_pos, tick_time: time.Dur
 
 /*
 TODO:
-display keys
 show level end screen
 show game end screen
 menu
@@ -575,6 +574,12 @@ get_sprite_from_tile :: proc(pos: [2]int) -> Sprite {
 	case .Red_Button_Pressed: sprite = sprites[.Red_Button_Pressed]
 	case .Yellow_Button: sprite = sprites[.Yellow_Button]
 	case .Yellow_Button_Pressed: sprite = sprites[.Yellow_Button_Pressed]
+	case .Key: sprite = sprites[.Key]
+	case .Lock: sprite = sprites[.Lock]
+	case .Golden_Key: sprite = sprites[.Golden_Key]
+	case .Golden_Lock: sprite = sprites[.Golden_Lock]
+	case .Bronze_Key: sprite = sprites[.Bronze_Key]
+	case .Bronze_Lock: sprite = sprites[.Bronze_Lock]
 	}
 
 	return sprite
@@ -769,18 +774,42 @@ render :: proc(window: ^swin.Window) {
 
 			// draw HUD
 			{
-				x := canvas.w
-				x -= 2
+				x := canvas.w - 2
+				y := 2
 
 				carrot_sprite := hud_sprites[.Carrot]
 				x -= carrot_sprite.w
 				swin.draw_from_texture(&canvas, atlas, x, 2, carrot_sprite)
-				small_array.push_back(&canvas_cache, swin.Rect{x, 2, carrot_sprite.w, carrot_sprite.h})
+				small_array.push_back(&canvas_cache, swin.Rect{x, y, carrot_sprite.w, carrot_sprite.h})
 				x -= 2
 
 				tbuf: [8]byte
 				carrots_str := strconv.itoa(tbuf[:], carrots)
-				small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, carrots_str, {x, 5}, true))
+				small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, carrots_str, {x, y + 3}, true))
+				y += carrot_sprite.h + 2
+				x = canvas.w - 2
+
+				if draw_player.key {
+					sprite := hud_sprites[.Key]
+					x -= sprite.w
+					swin.draw_from_texture(&canvas, atlas, x, y, sprite)
+					small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
+					x -= 2
+				}
+				if draw_player.golden_key {
+					sprite := hud_sprites[.Golden_Key]
+					x -= sprite.w
+					swin.draw_from_texture(&canvas, atlas, x, y, sprite)
+					small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
+					x -= 2
+				}
+				if draw_player.bronze_key {
+					sprite := hud_sprites[.Bronze_Key]
+					x -= sprite.w
+					swin.draw_from_texture(&canvas, atlas, x, y, sprite)
+					small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
+					x -= 2
+				}
 			}
 		}
 
@@ -801,7 +830,7 @@ render :: proc(window: ^swin.Window) {
 	}
 }
 
-can_move :: proc(pos: [2]int, d: Direction, belt: bool) -> bool {
+can_move :: proc(pos: [2]int, d: Direction) -> bool {
 	pos := pos
 	current_tile := get_level_tile(pos)
 
@@ -833,16 +862,13 @@ can_move :: proc(pos: [2]int, d: Direction, belt: bool) -> bool {
 		return false
 	}
 
-	if tile == .Belt_Left && d == .Right {
+	if tile == .Lock && !world.player.key {
 		return false
 	}
-	if tile == .Belt_Right && d == .Left {
+	if tile == .Golden_Lock && !world.player.golden_key {
 		return false
 	}
-	if tile == .Belt_Up && d == .Down {
-		return false
-	}
-	if tile == .Belt_Down && d == .Up {
+	if tile == .Bronze_Lock && !world.player.bronze_key {
 		return false
 	}
 
@@ -884,7 +910,20 @@ can_move :: proc(pos: [2]int, d: Direction, belt: bool) -> bool {
 		return false
 	}
 
-	if belt {
+	if tile == .Belt_Left && d == .Right {
+		return false
+	}
+	if tile == .Belt_Right && d == .Left {
+		return false
+	}
+	if tile == .Belt_Up && d == .Down {
+		return false
+	}
+	if tile == .Belt_Down && d == .Up {
+		return false
+	}
+
+	if world.player.belt {
 		return true
 	}
 
@@ -899,13 +938,13 @@ move_player :: #force_inline proc(d: Direction) {
 	if !world.player.dying.state && !world.player.fading.state && !world.player.walking.state {
 		#partial switch d {
 		case .Right:
-			if !can_move(world.player, .Right, world.player.belt) do return
+			if !can_move(world.player, .Right) do return
 		case .Left:
-			if !can_move(world.player, .Left, world.player.belt) do return
+			if !can_move(world.player, .Left) do return
 		case .Down:
-			if !can_move(world.player, .Down, world.player.belt) do return
+			if !can_move(world.player, .Down) do return
 		case .Up:
-			if !can_move(world.player, .Up, world.player.belt) do return
+			if !can_move(world.player, .Up) do return
 		}
 		world.player.direction = d
 		world.player.walking.state = true
@@ -996,6 +1035,24 @@ move_player_to_tile :: proc(d: Direction) {
 		if world.level.carrots == 0 {
 			world.level.end = true
 		}
+	case current_tile == .Key:
+		set_level_tile(world.player, .Ground)
+		world.player.key = true
+	case current_tile == .Lock:
+		set_level_tile(world.player, .Ground)
+		world.player.key = false
+	case current_tile == .Golden_Key:
+		set_level_tile(world.player, .Ground)
+		world.player.golden_key = true
+	case current_tile == .Golden_Lock:
+		set_level_tile(world.player, .Ground)
+		world.player.golden_key = false
+	case current_tile == .Bronze_Key:
+		set_level_tile(world.player, .Ground)
+		world.player.bronze_key = true
+	case current_tile == .Bronze_Lock:
+		set_level_tile(world.player, .Ground)
+		world.player.bronze_key = false
 	case current_tile == .Trap_Activated:
 		world.player.dying.state = true
 	case current_tile == .End:
@@ -1052,14 +1109,18 @@ load_level :: proc(index: int) {
 		}
 	}
 
-	for row, y in levels[index] do for char, x in row {
-		tile := char_to_tile[char] or_else .Ground
-		set_level_tile({x, y}, tile)
-		#partial switch tile {
-		case .Start:
-			world.player.pos = {x, y}
-		case .Carrot:
-			world.level.carrots += 1
+	for row, y in levels[index] {
+		x: int
+		for char in row {
+			tile := char_to_tile[char] or_else .Ground
+			set_level_tile({x, y}, tile)
+			#partial switch tile {
+			case .Start:
+				world.player.pos = {x, y}
+			case .Carrot:
+				world.level.carrots += 1
+			}
+			x += 1
 		}
 	}
 }
@@ -1203,7 +1264,7 @@ update_world :: proc(t: ^thread.Thread) {
 						world.player.walking.frame += 1
 					}
 
-					WALKING_ANIMATION_LEN :: len(walking_animation) - 1 when !ODIN_DEBUG else 3 // speed walking during debug
+					WALKING_ANIMATION_LEN :: len(walking_animation) when !ODIN_DEBUG else 3 // speed walking during debug
 
 					if world.player.walking.frame >= WALKING_ANIMATION_LEN {
 						world.player.walking.state = false
@@ -1214,7 +1275,7 @@ update_world :: proc(t: ^thread.Thread) {
 						if world.player.belt {
 							world.player.sprite = get_walking_sprite(0)
 						} else {
-							world.player.sprite = get_walking_sprite(world.player.walking.frame + 1)
+							world.player.sprite = get_walking_sprite(world.player.walking.frame)
 						}
 					}
 				case world.player.idle.state:
