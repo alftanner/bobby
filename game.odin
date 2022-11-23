@@ -95,7 +95,7 @@ Player :: struct {
 	fading: Animation,
 
 	belt: bool,
-	key, golden_key, bronze_key: bool,
+	silver_key, golden_key, copper_key: bool,
 }
 
 Level :: struct {
@@ -172,12 +172,12 @@ Tiles :: enum {
 	Belt_Right,
 	Belt_Up,
 	Belt_Down,
-	Key,
-	Lock,
+	Silver_Key,
+	Silver_Lock,
 	Golden_Key,
 	Golden_Lock,
-	Bronze_Key,
-	Bronze_Lock,
+	Copper_Key,
+	Copper_Lock,
 	Yellow_Button,
 	Yellow_Button_Pressed,
 	End,
@@ -237,12 +237,12 @@ Sprites :: enum {
 	Belt_Right,
 	Belt_Up,
 	Belt_Down,
-	Key,
-	Lock,
+	Silver_Key,
+	Silver_Lock,
 	Golden_Key,
 	Golden_Lock,
-	Bronze_Key,
-	Bronze_Lock,
+	Copper_Key,
+	Copper_Lock,
 	Yellow_Button,
 	Yellow_Button_Pressed,
 	End,
@@ -256,18 +256,18 @@ HUD_Sprites :: enum {
 	Carrot,
 	Egg,
 	Eyes,
-	Key,
+	Silver_Key,
 	Golden_Key,
-	Bronze_Key,
+	Copper_Key,
 }
 
 hud_sprites: [HUD_Sprites]Sprite = {
 	.Carrot     = {{128, 80, 14, 13},{}},
 	.Egg        = {{142, 80, 9,  13},{}},
 	.Eyes       = {{151, 80, 15, 13},{}},
-	.Key        = {{166, 80, 8,  13},{}},
+	.Silver_Key = {{166, 80, 8,  13},{}},
 	.Golden_Key = {{174, 80, 8,  13},{}},
-	.Bronze_Key = {{182, 80, 8,  13},{}},
+	.Copper_Key = {{182, 80, 8,  13},{}},
 }
 
 grass_sprites: map[bit_set[Direction]]Sprites = {
@@ -574,12 +574,12 @@ get_sprite_from_tile :: proc(pos: [2]int) -> Sprite {
 	case .Red_Button_Pressed: sprite = sprites[.Red_Button_Pressed]
 	case .Yellow_Button: sprite = sprites[.Yellow_Button]
 	case .Yellow_Button_Pressed: sprite = sprites[.Yellow_Button_Pressed]
-	case .Key: sprite = sprites[.Key]
-	case .Lock: sprite = sprites[.Lock]
+	case .Silver_Key: sprite = sprites[.Silver_Key]
+	case .Silver_Lock: sprite = sprites[.Silver_Lock]
 	case .Golden_Key: sprite = sprites[.Golden_Key]
 	case .Golden_Lock: sprite = sprites[.Golden_Lock]
-	case .Bronze_Key: sprite = sprites[.Bronze_Key]
-	case .Bronze_Lock: sprite = sprites[.Bronze_Lock]
+	case .Copper_Key: sprite = sprites[.Copper_Key]
+	case .Copper_Lock: sprite = sprites[.Copper_Lock]
 	}
 
 	return sprite
@@ -789,8 +789,8 @@ render :: proc(window: ^swin.Window) {
 				y += carrot_sprite.h + 2
 				x = canvas.w - 2
 
-				if draw_player.key {
-					sprite := hud_sprites[.Key]
+				if draw_player.silver_key {
+					sprite := hud_sprites[.Silver_Key]
 					x -= sprite.w
 					swin.draw_from_texture(&canvas, atlas, x, y, sprite)
 					small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
@@ -803,8 +803,8 @@ render :: proc(window: ^swin.Window) {
 					small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
 					x -= 2
 				}
-				if draw_player.bronze_key {
-					sprite := hud_sprites[.Bronze_Key]
+				if draw_player.copper_key {
+					sprite := hud_sprites[.Copper_Key]
 					x -= sprite.w
 					swin.draw_from_texture(&canvas, atlas, x, y, sprite)
 					small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
@@ -862,13 +862,13 @@ can_move :: proc(pos: [2]int, d: Direction) -> bool {
 		return false
 	}
 
-	if tile == .Lock && !world.player.key {
+	if tile == .Silver_Lock && !world.player.silver_key {
 		return false
 	}
 	if tile == .Golden_Lock && !world.player.golden_key {
 		return false
 	}
-	if tile == .Bronze_Lock && !world.player.bronze_key {
+	if tile == .Copper_Lock && !world.player.copper_key {
 		return false
 	}
 
@@ -1035,24 +1035,24 @@ move_player_to_tile :: proc(d: Direction) {
 		if world.level.carrots == 0 {
 			world.level.end = true
 		}
-	case current_tile == .Key:
+	case current_tile == .Silver_Key:
 		set_level_tile(world.player, .Ground)
-		world.player.key = true
-	case current_tile == .Lock:
+		world.player.silver_key = true
+	case current_tile == .Silver_Lock:
 		set_level_tile(world.player, .Ground)
-		world.player.key = false
+		world.player.silver_key = false
 	case current_tile == .Golden_Key:
 		set_level_tile(world.player, .Ground)
 		world.player.golden_key = true
 	case current_tile == .Golden_Lock:
 		set_level_tile(world.player, .Ground)
 		world.player.golden_key = false
-	case current_tile == .Bronze_Key:
+	case current_tile == .Copper_Key:
 		set_level_tile(world.player, .Ground)
-		world.player.bronze_key = true
-	case current_tile == .Bronze_Lock:
+		world.player.copper_key = true
+	case current_tile == .Copper_Lock:
 		set_level_tile(world.player, .Ground)
-		world.player.bronze_key = false
+		world.player.copper_key = false
 	case current_tile == .Trap_Activated:
 		world.player.dying.state = true
 	case current_tile == .End:
