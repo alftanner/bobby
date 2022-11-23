@@ -21,23 +21,6 @@ import swin "simple_window"
 SKY_BLUE: image.RGBA_Pixel : {139, 216, 245, 255}
 GAME_TITLE :: "Bobby Carrot Classic"
 
-Font :: struct {
-	using texture: swin.Texture2D,
-	table: map[rune][2]int,
-	glyph_size: struct{w, h: int},
-}
-debug_font: Font
-hud_font: Font
-atlas: swin.Texture2D
-
-Direction :: enum {
-	None,
-	Right,
-	Left,
-	Down,
-	Up,
-}
-
 // since settings will be saved to the file, they probably should be packed
 Settings :: struct #packed {
 	fps, tps: uint,
@@ -57,12 +40,29 @@ TILES_H :: 12
 TILE_SIZE :: 16
 TPS_SECOND :: default_settings.tps
 IDLING_TIME :: TPS_SECOND * 5 // how much time before starts idling
-LAYING_DEAD_TIME :: TPS_SECOND when !ODIN_DEBUG else 0 // how much time after dying
+LAYING_DEAD_TIME :: TPS_SECOND / 3 when !ODIN_DEBUG else 0 // how much time after dying
 BUFFER_W :: TILES_W * TILE_SIZE
 BUFFER_H :: TILES_H * TILE_SIZE
 WINDOW_W :: BUFFER_W * SCALE
 WINDOW_H :: BUFFER_H * SCALE
 SCALE :: 2
+
+Font :: struct {
+	using texture: swin.Texture2D,
+	table: map[rune][2]int,
+	glyph_size: struct{w, h: int},
+}
+debug_font: Font
+hud_font: Font
+atlas: swin.Texture2D
+
+Direction :: enum {
+	None,
+	Right,
+	Left,
+	Down,
+	Up,
+}
 
 Position_Queue :: small_array.Small_Array(256, [2]int) // max animations on the screen
 Region_Cache :: small_array.Small_Array(64, swin.Rect) // redraw regions
@@ -104,6 +104,7 @@ Level :: struct {
 	carrots: int,
 	animation: Animation,
 	end: bool,
+	current, next: int,
 
 	// for rendering
 	changed: bool,
@@ -118,7 +119,6 @@ World :: struct {
 	menu: bool,
 
 	level: Level,
-	current_level: int,
 }
 world: World = {
 	menu = true,
@@ -330,6 +330,7 @@ walking_animation := [?]Sprite {
 	{{18,  121, 18, 25}, {-1, -9}},
 	{{36,  121, 18, 25}, {-1, -9}},
 }
+WALKING_ANIM_LEN :: len(walking_animation) when !ODIN_DEBUG else 6 // speed walking during debug
 
 dying_animation := [?]Sprite {
 	{{0,   247, 22, 27}, {-3, -11}},
@@ -486,10 +487,9 @@ draw_stats :: proc(canvas: ^swin.Texture2D) -> swin.Rect {
 
 interpolate_tile_position :: #force_inline proc(frame_pos, tick_time: time.Duration, p: Player) -> [2]f32 {
 	if p.walking.state {
-		frame_len := 1/f32(world.player.walking.frame_len * len(walking_animation))
-		pos := f32(p.walking.timer) * frame_len
+		frame_len := 1/f32(world.player.walking.frame_len * WALKING_ANIM_LEN)
 		frame_delta := f32(frame_pos) * (frame_len/f32(tick_time))
-		delta := pos + frame_delta
+		delta := (f32(p.walking.timer) * frame_len) + frame_delta
 
 		#partial switch p.direction {
 		case .Right: return {f32(p.x) + delta, f32(p.y)}
@@ -513,6 +513,7 @@ interpolate_smooth_position :: #force_inline proc(frame_pos, tick_time: time.Dur
 
 /*
 TODO:
+show level begin screen
 show level end screen
 show game end screen
 menu
@@ -639,6 +640,7 @@ render :: proc(window: ^swin.Window) {
 	tiles_updated: Position_Queue
 	canvas_cache: Region_Cache
 	carrots: int
+	level_current, level_next: int
 
 	canvas := swin.texture_make(TILES_W * TILE_SIZE, TILES_H * TILE_SIZE)
 	background := swin.texture_make((TILES_W + 1) * TILE_SIZE, (TILES_H + 1) * TILE_SIZE)
@@ -679,6 +681,8 @@ render :: proc(window: ^swin.Window) {
 			diff = {f32(TILES_W - world.level.w), f32(TILES_H - world.level.h)}
 			draw_player = world.player
 			carrots = world.level.carrots
+			level_current = world.level.current
+			level_next = world.level.next
 			previous_tick = global_state.previous_tick
 			tick_time = sync.atomic_load(&global_state.tick_time)
 
@@ -934,6 +938,14 @@ can_move :: proc(pos: [2]int, d: Direction) -> bool {
 	return true
 }
 
+animation_start :: proc(a: ^Animation) {
+	if !a.state {
+		a.state = true
+		a.timer = 0
+		a.frame = 0
+	}
+}
+
 move_player :: #force_inline proc(d: Direction) {
 	if !world.player.dying.state && !world.player.fading.state && !world.player.walking.state {
 		#partial switch d {
@@ -947,7 +959,7 @@ move_player :: #force_inline proc(d: Direction) {
 			if !can_move(world.player, .Up) do return
 		}
 		world.player.direction = d
-		world.player.walking.state = true
+		animation_start(&world.player.walking)
 	}
 }
 
@@ -1054,10 +1066,11 @@ move_player_to_tile :: proc(d: Direction) {
 		set_level_tile(world.player, .Ground)
 		world.player.copper_key = false
 	case current_tile == .Trap_Activated:
-		world.player.dying.state = true
+		animation_start(&world.player.dying)
 	case current_tile == .End:
 		if world.level.carrots == 0 {
-			world.player.fading.state = true
+			world.level.next = world.level.current + 1
+			animation_start(&world.player.fading)
 		}
 	case current_tile in belt_tiles:
 		world.player.belt = true
@@ -1080,13 +1093,17 @@ load_level :: proc(index: int) {
 		},
 	}
 
-	if index >= len(levels) {
+	if index >= len(levels){
 		// TODO: end sequence
+		world.menu = true
+		return
+	} else if index < 0 {
 		world.menu = true
 		return
 	}
 
-	world.current_level = index
+	world.level.current = index
+	world.level.next = index
 	world.level.w = len(levels[index][0])
 	world.level.h = len(levels[index])
 	world.level.tiles = make([]Tiles, world.level.w * world.level.h)
@@ -1096,7 +1113,7 @@ load_level :: proc(index: int) {
 	// reset player
 	world.player = {
 		walking = {
-			frame_len = 2,
+			frame_len = 2 when !ODIN_DEBUG else 1,
 		},
 		idle = {
 			frame_len = 2,
@@ -1123,6 +1140,8 @@ load_level :: proc(index: int) {
 			x += 1
 		}
 	}
+
+	animation_start(&world.player.fading)
 }
 
 key_handler_menu :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
@@ -1145,7 +1164,7 @@ key_handler_menu :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	}
 }
 
-key_handler_game :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+key_handler_game :: proc(key: swin.Key_Code, state: bit_set[Key_State], shift: bool) {
 	#partial switch key {
 	case .Right: move_player(.Right)
 	case .Left:  move_player(.Left)
@@ -1155,8 +1174,11 @@ key_handler_game :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 		if .Pressed in state && !world.menu {
 			world.menu = true
 		}
-	case .R: world.player.dying.state = true
-	case .F: world.player.fading.state = true
+	case .R:
+		animation_start(&world.player.dying)
+	case .F:
+		world.level.next = world.level.current + (1 if !shift else -1)
+		animation_start(&world.player.fading)
 	}
 }
 
@@ -1211,11 +1233,12 @@ update_world :: proc(t: ^thread.Thread) {
 					if world.menu {
 						key_handler_menu(key, state)
 					} else {
-						key_handler_game(key, state)
+						shift := global_state.frame_inputs.keys[.LShift]
+						key_handler_game(key, state, .Pressed in shift || .Held in shift)
 					}
-					if .Pressed in state do state = {.Held}
 					if .Repeated in state do state -= {.Repeated}
 					if .Released in state do state = {}
+					if .Pressed in state do state = {.Held}
 				}
 			}
 
@@ -1224,49 +1247,47 @@ update_world :: proc(t: ^thread.Thread) {
 				// animations
 				switch {
 				case world.player.fading.state:
-					world.player.fading.timer += 1
+					world.player.fading.frame = world.player.fading.timer / world.player.fading.frame_len
 
-					if world.player.fading.timer % world.player.fading.frame_len == 0 {
-						world.player.fading.frame += 1
-					}
 					if world.player.fading.frame >= len(fading_animation) {
 						world.player.fading.state = false
 						world.player.fading.timer = 0
 						world.player.fading.frame = 0
-						load_level(world.current_level + 1)
+						if world.level.current != world.level.next {
+							load_level(world.level.next)
+						}
 					} else {
+						if world.level.current == world.level.next {
+							// reverse frames
+							world.player.fading.frame = len(fading_animation) - 1 - world.player.fading.frame
+						}
 						world.player.sprite = fading_animation[world.player.fading.frame]
 					}
-				case world.player.dying.state:
-					world.player.dying.timer += 1
 
-					if world.player.dying.timer % world.player.dying.frame_len == 0 {
-						world.player.dying.frame += 1
-					}
+					world.player.fading.timer += 1
+				case world.player.dying.state:
+					world.player.dying.frame = world.player.dying.timer / world.player.dying.frame_len
+
 					if world.player.dying.frame >= len(dying_animation) {
 						if world.player.dying.timer - (len(dying_animation) * world.player.dying.frame_len) >= LAYING_DEAD_TIME {
 							world.player.dying.state = false
 							world.player.dying.timer = 0
 							world.player.dying.frame = 0
-							load_level(world.current_level)
+							load_level(world.level.current)
 						}
 					} else {
 						world.player.sprite = dying_animation[world.player.dying.frame]
 					}
+
+					world.player.dying.timer += 1
 				case world.player.walking.state:
 					world.player.idle.state = false
 					world.player.idle.timer = 0
 					world.player.idle.frame = 0
 
-					world.player.walking.timer += 1
+					world.player.walking.frame = world.player.walking.timer / world.player.walking.frame_len
 
-					if world.player.walking.timer % world.player.walking.frame_len == 0 {
-						world.player.walking.frame += 1
-					}
-
-					WALKING_ANIMATION_LEN :: len(walking_animation) when !ODIN_DEBUG else 3 // speed walking during debug
-
-					if world.player.walking.frame >= WALKING_ANIMATION_LEN {
+					if world.player.walking.frame + 1 >= WALKING_ANIM_LEN {
 						world.player.walking.state = false
 						world.player.walking.timer = 0
 						world.player.walking.frame = 0
@@ -1275,30 +1296,31 @@ update_world :: proc(t: ^thread.Thread) {
 						if world.player.belt {
 							world.player.sprite = get_walking_sprite(0)
 						} else {
-							world.player.sprite = get_walking_sprite(world.player.walking.frame)
+							world.player.sprite = get_walking_sprite(world.player.walking.frame + 1)
 						}
 					}
+
+					world.player.walking.timer += 1
 				case world.player.idle.state:
-					world.player.idle.timer += 1
-					if world.player.idle.timer % world.player.idle.frame_len == 0 {
-						world.player.idle.frame += 1
-						world.player.idle.frame %= len(idling_animation)
-					}
+					world.player.idle.frame = world.player.idle.timer / world.player.idle.frame_len
+
+					world.player.idle.frame %= len(idling_animation)
 					world.player.sprite = idling_animation[world.player.idle.frame]
+
+					world.player.idle.timer += 1
 				case:
 					world.player.sprite = get_walking_sprite(0)
-					world.player.idle.timer += 1
+
 					if world.player.idle.timer > IDLING_TIME {
-						world.player.idle.timer = 0
-						world.player.idle.state = true
+						animation_start(&world.player.idle)
 					}
+
+					world.player.idle.timer += 1
 				}
 
+				world.level.animation.frame = world.level.animation.timer / world.level.animation.frame_len
+				world.level.animation.frame %= len(end_animation) // all persistent animations have the same amount of frames
 				world.level.animation.timer += 1
-				if world.level.animation.timer % world.level.animation.frame_len == 0 {
-					world.level.animation.frame += 1
-					world.level.animation.frame %= len(end_animation) // all persistent animations have the same amount of frames
-				}
 
 				// belts
 				if world.player.belt {
@@ -1371,7 +1393,7 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 			switch ev.state {
 			case .Released: state += {.Released}
 			case .Repeated: state += {.Repeated}
-			case .Pressed:  state += {.Pressed}
+			case .Pressed: state += {.Pressed}
 			}
 			global_state.frame_inputs.keys[ev.key] = state
 		}
