@@ -31,11 +31,11 @@ default_settings: Settings : {
 	fps = 60,
 	tps = 30,
 	vsync = true,
-	show_stats = true,
+	show_stats = true when ODIN_DEBUG else false,
 }
 settings: Settings = default_settings
 
-TILES_W :: 16
+TILES_W :: 12
 TILES_H :: 12
 TILE_SIZE :: 16
 TPS_SECOND :: default_settings.tps
@@ -43,16 +43,16 @@ IDLING_TIME :: TPS_SECOND * 5 // how much time before starts idling
 LAYING_DEAD_TIME :: TPS_SECOND / 3 when !ODIN_DEBUG else 0 // how much time after dying
 BUFFER_W :: TILES_W * TILE_SIZE
 BUFFER_H :: TILES_H * TILE_SIZE
-WINDOW_W :: BUFFER_W * SCALE
-WINDOW_H :: BUFFER_H * SCALE
-SCALE :: 2
+DEFAULT_SCALE :: 3
+WINDOW_W :: BUFFER_W * DEFAULT_SCALE
+WINDOW_H :: BUFFER_H * DEFAULT_SCALE
 
 Font :: struct {
 	using texture: swin.Texture2D,
 	table: map[rune][2]int,
 	glyph_size: struct{w, h: int},
 }
-debug_font: Font
+general_font: Font
 hud_font: Font
 atlas: swin.Texture2D
 
@@ -103,8 +103,11 @@ Level :: struct {
 	tiles: []Tiles,
 	carrots: int,
 	animation: Animation,
-	end: bool,
+	can_end, ended: bool,
 	current, next: int,
+	start_tick: time.Time,
+	end_time: time.Duration,
+	steps: int,
 
 	// for rendering
 	changed: bool,
@@ -259,6 +262,7 @@ HUD_Sprites :: enum {
 	Silver_Key,
 	Golden_Key,
 	Copper_Key,
+	Success,
 }
 
 hud_sprites: [HUD_Sprites]Sprite = {
@@ -268,6 +272,7 @@ hud_sprites: [HUD_Sprites]Sprite = {
 	.Silver_Key = {{166, 80, 8,  13},{}},
 	.Golden_Key = {{174, 80, 8,  13},{}},
 	.Copper_Key = {{182, 80, 8,  13},{}},
+	.Success    = {{128, 93, 54, 13},{}},
 }
 
 grass_sprites: map[bit_set[Direction]]Sprites = {
@@ -353,6 +358,7 @@ fading_animation := [?]Sprite {
 	{{108, 221, 18, 25}, {-1, -9}},
 	{{126, 221, 18, 25}, {-1, -9}},
 	{{144, 221, 18, 25}, {-1, -9}},
+	{{162, 221, 18, 25}, {-1, -9}},
 }
 
 end_animation := [?]Sprite {
@@ -380,7 +386,7 @@ get_2_ints :: #force_inline proc(p: ^i64) -> (i32, i32) {
 limit_frame :: proc(frame_time: time.Duration, frame_limit: uint, accurate := true) {
 	if frame_limit <= 0 do return
 
-	ms_per_frame := time.Duration((1000.0 / f64(frame_limit)) * f64(time.Millisecond))
+	ms_per_frame := time.Duration((1000.0 / f32(frame_limit)) * f32(time.Millisecond))
 	to_sleep := ms_per_frame - frame_time
 
 	if to_sleep <= 0 do return
@@ -392,49 +398,12 @@ limit_frame :: proc(frame_time: time.Duration, frame_limit: uint, accurate := tr
 	}
 }
 
-pixel_mod :: proc(dst: image.RGBA_Pixel, mod: image.RGB_Pixel) -> (pixel: image.RGBA_Pixel) {
-	pixel.r = u8(cast(f32)dst.r * (cast(f32)mod.r / 255))
-	pixel.g = u8(cast(f32)dst.g * (cast(f32)mod.g / 255))
-	pixel.b = u8(cast(f32)dst.b * (cast(f32)mod.b / 255))
-	pixel.a = dst.a
-	return
-}
-
-draw_text :: proc(canvas: ^swin.Texture2D, font: Font, text: string, pos: [2]int, rtl := false) -> (region: swin.Rect) {
+measure_or_draw_text :: proc(canvas: ^swin.Texture2D, font: Font, text: string, pos: [2]int, no_draw := false) -> (region: swin.Rect) {
 	pos := pos
 	region.x = pos.x
 	region.y = pos.y
 
-	if rtl {
-		region.w = pos.x
-		text_rev := strings.reverse(text, context.temp_allocator)
-		for ch in text_rev {
-			if ch == '\n' {
-				pos.x = region.x
-				pos.y += font.glyph_size.h + 1
-				continue
-			}
-
-			glyph_pos := font.table[ch] or_else font.table['?']
-			swin.draw_from_texture(canvas, font.texture, pos.x - font.glyph_size.w, pos.y, {glyph_pos.x, glyph_pos.y, font.glyph_size.w, font.glyph_size.h})
-
-			pos.x -= font.glyph_size.w + 1
-			region.w = min(region.w, pos.x)
-		}
-		region.h = pos.y + font.glyph_size.h
-
-		x := region.w
-		w := region.x - region.w
-		region.x = x
-		region.w = w
-
-		return
-	}
-
-	// ltr
 	for ch in text {
-		region.w = max(region.w, pos.x)
-
 		if ch == '\n' {
 			pos.x = region.x
 			pos.y += font.glyph_size.h + 1
@@ -442,13 +411,26 @@ draw_text :: proc(canvas: ^swin.Texture2D, font: Font, text: string, pos: [2]int
 		}
 
 		glyph_pos := font.table[ch] or_else font.table['?']
-		swin.draw_from_texture(canvas, font.texture, pos.x, pos.y, {glyph_pos.x, glyph_pos.y, font.glyph_size.w, font.glyph_size.h})
+		if !no_draw {
+			swin.draw_from_texture(canvas, font.texture, pos.x + 1, pos.y + 1, {glyph_pos.x, glyph_pos.y, font.glyph_size.w, font.glyph_size.h}, .None, {})
+			swin.draw_from_texture(canvas, font.texture, pos.x, pos.y, {glyph_pos.x, glyph_pos.y, font.glyph_size.w, font.glyph_size.h})
+		}
 
 		pos.x += font.glyph_size.w + 1
+		region.w = max(region.w, pos.x)
 	}
-	region.h = pos.y + font.glyph_size.h
+	region.h = pos.y + font.glyph_size.h + 1
 
 	return
+}
+
+draw_text :: proc(canvas: ^swin.Texture2D, font: Font, text: string, pos: [2]int) -> (region: swin.Rect) {
+	return measure_or_draw_text(canvas, font, text, pos)
+}
+
+measure_text :: proc(font: Font, text: string) -> (w, h: int) {
+	region := measure_or_draw_text(nil, font, text, {}, true)
+	return region.w, region.h
 }
 
 draw_stats :: proc(canvas: ^swin.Texture2D) -> swin.Rect {
@@ -482,14 +464,23 @@ draw_stats :: proc(canvas: ^swin.Texture2D) -> swin.Rect {
 		u32(math.round(tps.average)), lastu.average,
 	)
 
-	return draw_text(canvas, debug_font, text, {1, 1})
+	x := canvas.w - 2
+	y := canvas.h - 2
+	{
+		w, h := measure_text(general_font, text)
+		x -= w
+		y -= h
+	}
+	return draw_text(canvas, general_font, text, {x, y})
 }
 
-interpolate_tile_position :: #force_inline proc(frame_pos, tick_time: time.Duration, p: Player) -> [2]f32 {
+interpolate_tile_position :: #force_inline proc(frame_pos, tick_time: f32, p: Player) -> [2]f32 {
 	if p.walking.state {
-		frame_len := 1/f32(world.player.walking.frame_len * WALKING_ANIM_LEN)
-		frame_delta := f32(frame_pos) * (frame_len/f32(tick_time))
-		delta := (f32(p.walking.timer) * frame_len) + frame_delta
+		anim_frame_len := f32(p.walking.frame_len * WALKING_ANIM_LEN)
+		frame_delta := frame_pos / tick_time
+		delta := (f32(p.walking.timer) + frame_delta) / anim_frame_len
+		// even if frame was too long after the tick, we don't want to overextend the position any further than it can normally be
+		delta = min(delta, 1)
 
 		#partial switch p.direction {
 		case .Right: return {f32(p.x) + delta, f32(p.y)}
@@ -513,29 +504,10 @@ interpolate_smooth_position :: #force_inline proc(frame_pos, tick_time: time.Dur
 
 /*
 TODO:
-show level begin screen
-show level end screen
+save time and steps
 show game end screen
 menu
 */
-
-copy_level :: proc(dst: ^Level, src: Level) {
-	if dst.w != src.w || dst.h != src.h {
-		if len(dst.tiles) != 0 {
-			delete(dst.tiles)
-		}
-
-		dst.w = src.w
-		dst.h = src.h
-		dst.tiles = make([]Tiles, dst.w * dst.h)
-	}
-	dst.carrots = src.carrots
-	dst.animation = src.animation
-	dst.end = src.end
-	for _, idx in dst.tiles {
-		dst.tiles[idx] = src.tiles[idx]
-	}
-}
 
 get_sprite_from_tile :: proc(pos: [2]int) -> Sprite {
 	tile := get_level_tile(pos)
@@ -592,7 +564,7 @@ draw_level_incrementally :: proc(t: ^swin.Texture2D, q: ^Position_Queue) {
 		y := idx/world.level.w
 		tile := get_level_tile({x, y})
 
-		if !changed && tile not_in belt_tiles && !(world.level.end && tile == .End) {
+		if !changed && tile not_in belt_tiles && !(world.level.can_end && tile == .End) {
 			continue
 		}
 
@@ -632,15 +604,18 @@ region_intersection :: proc(r1, r2: swin.Rect) -> swin.Rect {
 
 render :: proc(window: ^swin.Window) {
 	previous_tick: time.Tick
-	tick_time: time.Duration
-	draw_player := world.player
+	tick_time: f32
+	player := world.player
 	menu := world.menu
-	diff, old_offset: [2]f32
+	diff: [2]f32
+	full_redraw, level_ended: bool
 	level_texture: swin.Texture2D
 	tiles_updated: Position_Queue
 	canvas_cache: Region_Cache
-	carrots: int
+	carrots, steps: int
 	level_current, level_next: int
+	timer, level_time: time.Duration
+	offset: [2]f32
 
 	canvas := swin.texture_make(TILES_W * TILE_SIZE, TILES_H * TILE_SIZE)
 	background := swin.texture_make((TILES_W + 1) * TILE_SIZE, (TILES_H + 1) * TILE_SIZE)
@@ -675,16 +650,20 @@ render :: proc(window: ^swin.Window) {
 			if world.level.changed {
 				draw_level(&level_texture)
 				world.level.changed = false
-				old_offset = {-1, -1}
+				full_redraw = true
 			}
 			draw_level_incrementally(&level_texture, &tiles_updated)
 			diff = {f32(TILES_W - world.level.w), f32(TILES_H - world.level.h)}
-			draw_player = world.player
+			player = world.player
 			carrots = world.level.carrots
 			level_current = world.level.current
 			level_next = world.level.next
+			timer = time.since(world.level.start_tick)
+			steps = world.level.steps
+			level_time = world.level.end_time
+			level_ended = world.level.ended
 			previous_tick = global_state.previous_tick
-			tick_time = sync.atomic_load(&global_state.tick_time)
+			tick_time = f32(time.duration_milliseconds(sync.atomic_load(&global_state.tick_time)))
 
 			sync.atomic_store(&world.updated, false)
 		}
@@ -696,18 +675,17 @@ render :: proc(window: ^swin.Window) {
 			off_y := (canvas.h - TITLE_SCREEN.h) / 2
 			swin.draw_from_texture(&canvas, atlas, off_x, off_y, TITLE_SCREEN)
 		} else {
-			//slice.fill(canvas.pixels, clear_color)
-
-			player_pos := interpolate_tile_position(time.tick_diff(previous_tick, time.tick_now()), tick_time, draw_player)
+			frame_pos := f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now())))
+			player_pos := interpolate_tile_position(frame_pos, tick_time, player)
 			draw_background: bool
-			offset: [2]f32
-			redraw_level: bool
+			old_offset := offset
+			offset = {}
 
 			if diff.x > 0 {
 				offset.x = diff.x / 2
 				draw_background = true
 			} else {
-				off := (f32(TILES_W) / 2) - f32(player_pos.x)
+				off := (f32(TILES_W) / 2) - (f32(player_pos.x) + 0.5)
 				if diff.x > off {
 					offset.x = diff.x
 				} else {
@@ -719,7 +697,7 @@ render :: proc(window: ^swin.Window) {
 				offset.y = diff.y / 2
 				draw_background = true
 			} else {
-				off := (f32(TILES_H) / 2) - f32(player_pos.y)
+				off := (f32(TILES_H) / 2) - (f32(player_pos.y) + 0.5)
 				if diff.y > off {
 					offset.y = diff.y
 				} else {
@@ -727,10 +705,9 @@ render :: proc(window: ^swin.Window) {
 				}
 			}
 
-			if offset != old_offset || draw_background {
-				redraw_level = true
+			if old_offset != offset {
+				full_redraw = true
 			}
-			old_offset = offset
 
 			bg_off_x := int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
 			bg_off_y := int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
@@ -740,7 +717,8 @@ render :: proc(window: ^swin.Window) {
 			lvl_rect: swin.Rect = {0, 0, level_texture.w, level_texture.h}
 			lvl_region: swin.Rect = {int(offset.x * TILE_SIZE), int(offset.y * TILE_SIZE), lvl_rect.w, lvl_rect.h}
 
-			if redraw_level { // full redraw
+			if full_redraw {
+				full_redraw = false
 				small_array.clear(&canvas_cache)
 				small_array.clear(&tiles_updated)
 				if draw_background {
@@ -771,49 +749,121 @@ render :: proc(window: ^swin.Window) {
 
 			// draw player
 			pos := (player_pos + offset) * TILE_SIZE
-			px := int(pos.x) + draw_player.sprite.origin.x
-			py := int(pos.y) + draw_player.sprite.origin.y
-			swin.draw_from_texture(&canvas, atlas, px, py, draw_player.sprite)
-			small_array.push_back(&canvas_cache, swin.Rect{px, py, draw_player.sprite.w, draw_player.sprite.h})
+			px := int(pos.x) + player.sprite.origin.x
+			py := int(pos.y) + player.sprite.origin.y
+			swin.draw_from_texture(&canvas, atlas, px, py, player.sprite)
+			small_array.push_back(&canvas_cache, swin.Rect{px, py, player.sprite.w, player.sprite.h})
 
-			// draw HUD
-			{
-				x := canvas.w - 2
-				y := 2
-
-				carrot_sprite := hud_sprites[.Carrot]
-				x -= carrot_sprite.w
-				swin.draw_from_texture(&canvas, atlas, x, 2, carrot_sprite)
-				small_array.push_back(&canvas_cache, swin.Rect{x, y, carrot_sprite.w, carrot_sprite.h})
-				x -= 2
-
-				tbuf: [8]byte
-				carrots_str := strconv.itoa(tbuf[:], carrots)
-				small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, carrots_str, {x, y + 3}, true))
-				y += carrot_sprite.h + 2
-				x = canvas.w - 2
-
-				if draw_player.silver_key {
-					sprite := hud_sprites[.Silver_Key]
-					x -= sprite.w
-					swin.draw_from_texture(&canvas, atlas, x, y, sprite)
-					small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
-					x -= 2
+			if !level_ended { // HUD
+				// left part
+				{
+					tbuf: [8]byte
+					timer_str := fmt.bprintf(tbuf[:], "{:02i}:{:02i}", int(time.duration_minutes(timer)), int(time.duration_seconds(timer)) % 60)
+					small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, timer_str, {2, 2}))
 				}
-				if draw_player.golden_key {
-					sprite := hud_sprites[.Golden_Key]
-					x -= sprite.w
-					swin.draw_from_texture(&canvas, atlas, x, y, sprite)
-					small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
-					x -= 2
+				// level begin screen
+				if time.duration_seconds(timer) < 2 {
+					tbuf: [16]byte
+					level_str := fmt.bprintf(tbuf[:], "Level {}", level_current + 1)
+					w, h := measure_text(general_font, level_str)
+					x := (canvas.w - w) / 2
+					y := (canvas.h - h) / 2
+					small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, level_str, {x, y}))
 				}
-				if draw_player.copper_key {
-					sprite := hud_sprites[.Copper_Key]
-					x -= sprite.w
-					swin.draw_from_texture(&canvas, atlas, x, y, sprite)
-					small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
+				// right part
+				{
+					x := canvas.w - 2
+					y := 2
+
+					carrot_sprite := hud_sprites[.Carrot]
+					x -= carrot_sprite.w
+					swin.draw_from_texture(&canvas, atlas, x, 2, carrot_sprite)
+					small_array.push_back(&canvas_cache, swin.Rect{x, y, carrot_sprite.w, carrot_sprite.h})
 					x -= 2
+
+					tbuf: [8]byte
+					carrots_str := strconv.itoa(tbuf[:], carrots)
+					{
+						w, _ := measure_text(hud_font, carrots_str)
+						x -= w
+					}
+					small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, carrots_str, {x, y + 3}))
+					y += carrot_sprite.h + 2
+					x = canvas.w - 2
+
+					if player.silver_key {
+						sprite := hud_sprites[.Silver_Key]
+						x -= sprite.w
+						swin.draw_from_texture(&canvas, atlas, x, y, sprite)
+						small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
+						x -= 2
+					}
+					if player.golden_key {
+						sprite := hud_sprites[.Golden_Key]
+						x -= sprite.w
+						swin.draw_from_texture(&canvas, atlas, x, y, sprite)
+						small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
+						x -= 2
+					}
+					if player.copper_key {
+						sprite := hud_sprites[.Copper_Key]
+						x -= sprite.w
+						swin.draw_from_texture(&canvas, atlas, x, y, sprite)
+						small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
+						x -= 2
+					}
 				}
+			} else if !player.fading.state { // level end screen
+				x, y, total_h: int
+				success := hud_sprites[.Success]
+				success_x := (canvas.w - success.w) / 2
+				total_h += success.h + (general_font.glyph_size.h * 2)
+
+				tbuf: [64]byte
+				time_str := fmt.bprintf(tbuf[:32], "Time: {:02i}:{:02i}:{:02i}",
+					int(time.duration_minutes(level_time)),
+					int(time.duration_seconds(level_time)) % 60,
+					int(time.duration_milliseconds(level_time)) % 60,
+				)
+				time_x, time_h: int
+				{
+					w, h := measure_text(general_font, time_str)
+					time_x = (canvas.w - w) / 2
+					time_h = h
+				}
+				total_h += time_h + general_font.glyph_size.h
+
+				steps_str := fmt.bprintf(tbuf[32:48], "Steps: {}", steps)
+				steps_x, steps_h: int
+				{
+					w, h := measure_text(general_font, steps_str)
+					steps_x = (canvas.w - w) / 2
+					steps_h = h
+				}
+				total_h += steps_h + (general_font.glyph_size.h * 2)
+
+				hint_str := "Press Enter to continue" // TODO: should blink ever second
+				hint_x, hint_h: int
+				{
+					w, h := measure_text(general_font, hint_str)
+					hint_x = (canvas.w - w) / 2
+					hint_h = h
+				}
+				total_h += hint_h
+
+				x = (canvas.w - success.w) / 2
+				y = (canvas.w - total_h) / 2
+				swin.draw_from_texture(&canvas, atlas, x, y, success)
+				small_array.push_back(&canvas_cache, swin.Rect{x, y, success.w, success.h})
+				y += success.h + (general_font.glyph_size.h * 2)
+
+				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, time_str, {time_x, y}))
+				y += time_h + general_font.glyph_size.h
+
+				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, steps_str, {steps_x, y}))
+				y += steps_h + (general_font.glyph_size.h * 2)
+
+				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, hint_str, {hint_x, y}))
 			}
 		}
 
@@ -828,7 +878,19 @@ render :: proc(window: ^swin.Window) {
 		} else {
 			limit_frame(time.tick_since(start_tick), settings.fps)
 		}
-		swin.display_pixels(window, canvas, {0, 0, int(client_w), int(client_h)})
+
+		scale := 1
+		for {
+			scale += 1
+			if BUFFER_W * scale > cast(int)client_w || BUFFER_H * scale > cast(int)client_h {
+				scale -= 1
+				break
+			}
+		}
+		buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
+		off_x := (cast(int)client_w - buf_w) / 2
+		off_y := (cast(int)client_h - buf_h) / 2
+		swin.display_pixels(window, canvas, {off_x, off_y, buf_w, buf_h})
 
 		sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 	}
@@ -938,12 +1000,25 @@ can_move :: proc(pos: [2]int, d: Direction) -> bool {
 	return true
 }
 
+stop_idling :: proc() {
+	world.player.idle.state = false
+	world.player.idle.timer = 0
+	world.player.idle.frame = 0
+}
+
 animation_start :: proc(a: ^Animation) {
 	if !a.state {
+		stop_idling()
 		a.state = true
 		a.timer = 0
 		a.frame = 0
 	}
+}
+
+start_moving :: proc(d: Direction) {
+	world.player.direction = d
+	animation_start(&world.player.walking)
+	world.level.steps += 1
 }
 
 move_player :: #force_inline proc(d: Direction) {
@@ -958,8 +1033,7 @@ move_player :: #force_inline proc(d: Direction) {
 		case .Up:
 			if !can_move(world.player, .Up) do return
 		}
-		world.player.direction = d
-		animation_start(&world.player.walking)
+		start_moving(d)
 	}
 }
 
@@ -1016,6 +1090,13 @@ press_yellow_button :: proc() {
 	}
 }
 
+finish_level :: proc(next: int) {
+	world.level.ended = true
+	world.level.end_time = time.since(world.level.start_tick)
+	world.level.next = next
+	animation_start(&world.player.fading)
+}
+
 move_player_to_tile :: proc(d: Direction) {
 	original_pos := world.player.pos
 	#partial switch d {
@@ -1045,7 +1126,7 @@ move_player_to_tile :: proc(d: Direction) {
 		set_level_tile(world.player, .Carrot_Hole)
 		world.level.carrots -= 1
 		if world.level.carrots == 0 {
-			world.level.end = true
+			world.level.can_end = true
 		}
 	case current_tile == .Silver_Key:
 		set_level_tile(world.player, .Ground)
@@ -1069,8 +1150,7 @@ move_player_to_tile :: proc(d: Direction) {
 		animation_start(&world.player.dying)
 	case current_tile == .End:
 		if world.level.carrots == 0 {
-			world.level.next = world.level.current + 1
-			animation_start(&world.player.fading)
+			finish_level(world.level.current + 1)
 		}
 	case current_tile in belt_tiles:
 		world.player.belt = true
@@ -1122,7 +1202,7 @@ load_level :: proc(index: int) {
 			frame_len = 3 when !ODIN_DEBUG else 1,
 		},
 		fading = {
-			frame_len = 2,
+			frame_len = 2 when !ODIN_DEBUG else 1,
 		}
 	}
 
@@ -1142,6 +1222,8 @@ load_level :: proc(index: int) {
 	}
 
 	animation_start(&world.player.fading)
+	world.level.start_tick = time.now()
+	world.level.end_time = 0
 }
 
 key_handler_menu :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
@@ -1165,26 +1247,46 @@ key_handler_menu :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 }
 
 key_handler_game :: proc(key: swin.Key_Code, state: bit_set[Key_State], shift: bool) {
-	#partial switch key {
-	case .Right: move_player(.Right)
-	case .Left:  move_player(.Left)
-	case .Down:  move_player(.Down)
-	case .Up:    move_player(.Up)
-	case .Escape:
-		if .Pressed in state && !world.menu {
-			world.menu = true
+	if world.level.ended {
+		#partial switch key {
+		case .Escape:
+			if .Pressed in state {
+				world.menu = true
+			}
+		case .Enter:
+			if .Pressed in state {
+				load_level(world.level.next)
+			}
+		case .R:
+			load_level(world.level.current)
 		}
-	case .R:
-		animation_start(&world.player.dying)
-	case .F:
-		world.level.next = world.level.current + (1 if !shift else -1)
-		animation_start(&world.player.fading)
+	} else {
+		#partial switch key {
+		case .Right: move_player(.Right)
+		case .Left:  move_player(.Left)
+		case .Down:  move_player(.Down)
+		case .Up:    move_player(.Up)
+		case .Escape:
+			if .Pressed in state {
+				world.menu = true
+			}
+		case .R:
+			if .Pressed in state {
+				fmt.println(state)
+				animation_start(&world.player.dying)
+			}
+		case .F:
+			if !world.player.fading.state {
+				load_level(world.level.current + (1 if !shift else -1))
+				//finish_level(world.level.current + (1 if !shift else -1))
+			}
+		}
 	}
 }
 
 get_end_sprite :: proc(frame: uint) -> Sprite {
 	sprite := sprites[.End]
-	if world.level.end {
+	if world.level.can_end {
 		sprite = end_animation[frame]
 	}
 	return sprite
@@ -1236,6 +1338,7 @@ update_world :: proc(t: ^thread.Thread) {
 						shift := global_state.frame_inputs.keys[.LShift]
 						key_handler_game(key, state, .Pressed in shift || .Held in shift)
 					}
+
 					if .Repeated in state do state -= {.Repeated}
 					if .Released in state do state = {}
 					if .Pressed in state do state = {.Held}
@@ -1253,9 +1356,6 @@ update_world :: proc(t: ^thread.Thread) {
 						world.player.fading.state = false
 						world.player.fading.timer = 0
 						world.player.fading.frame = 0
-						if world.level.current != world.level.next {
-							load_level(world.level.next)
-						}
 					} else {
 						if world.level.current == world.level.next {
 							// reverse frames
@@ -1281,10 +1381,6 @@ update_world :: proc(t: ^thread.Thread) {
 
 					world.player.dying.timer += 1
 				case world.player.walking.state:
-					world.player.idle.state = false
-					world.player.idle.timer = 0
-					world.player.idle.frame = 0
-
 					world.player.walking.frame = world.player.walking.timer / world.player.walking.frame_len
 
 					if world.player.walking.frame + 1 >= WALKING_ANIM_LEN {
@@ -1308,7 +1404,7 @@ update_world :: proc(t: ^thread.Thread) {
 					world.player.sprite = idling_animation[world.player.idle.frame]
 
 					world.player.idle.timer += 1
-				case:
+				case !world.level.ended:
 					world.player.sprite = get_walking_sprite(0)
 
 					if world.player.idle.timer > IDLING_TIME {
@@ -1399,7 +1495,7 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 		}
 	case swin.Mouse_Button_Event:
 	case swin.Mouse_Move_Event:
-		save_2_ints(&global_state.mouse_pos, ev.x, ev.y)
+		save_2_ints(&global_state.mouse_pos, i32(ev.x), i32(ev.y))
 	case swin.Mouse_Wheel_Event:
 	}
 }
@@ -1419,14 +1515,14 @@ load_texture :: proc(data: []byte, $layout: typeid) -> (t: swin.Texture2D) {
 }
 
 load_resources :: proc() {
-	debug_font.texture = load_texture(#load("res/font.png"), image.RGBA_Pixel)
-	debug_font.glyph_size = {5, 7}
-	debug_font.table = make(map[rune][2]int)
+	general_font.texture = load_texture(#load("res/font.png"), image.RGBA_Pixel)
+	general_font.glyph_size = {5, 7}
+	general_font.table = make(map[rune][2]int)
 	for ch in ` 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ?'".,:;~!@#$^&_|\/%*+-=<>()[]{}` {
-		glyph_idx := len(debug_font.table)
-		gx := (glyph_idx % (debug_font.w / debug_font.glyph_size.w)) * debug_font.glyph_size.w
-		gy := (glyph_idx / (debug_font.w / debug_font.glyph_size.w)) * debug_font.glyph_size.h
-		debug_font.table[ch] = {gx, gy}
+		glyph_idx := len(general_font.table)
+		gx := (glyph_idx % (general_font.w / general_font.glyph_size.w)) * general_font.glyph_size.w
+		gy := (glyph_idx / (general_font.w / general_font.glyph_size.w)) * general_font.glyph_size.h
+		general_font.table[ch] = {gx, gy}
 	}
 
 	atlas = load_texture(#load("res/atlas.png"), image.RGBA_Pixel)
@@ -1434,7 +1530,7 @@ load_resources :: proc() {
 	hud_font.texture = atlas
 	hud_font.glyph_size = {5, 8}
 	hud_font.table = make(map[rune][2]int)
-	for ch in `0123456789:` {
+	for ch in `0123456789:?` {
 		OFFSET: [2]int : {128, 106}
 		glyph_idx := len(hud_font.table)
 		gx := OFFSET.x + (glyph_idx * hud_font.glyph_size.w)
@@ -1453,8 +1549,8 @@ load_resources :: proc() {
 
 free_resources :: proc() {
 	swin.texture_destroy(&atlas)
-	swin.texture_destroy(&debug_font.texture)
-	delete(debug_font.table)
+	swin.texture_destroy(&general_font.texture)
+	delete(general_font.table)
 	// NOTE: hud_font uses the same texture as atlas so no need to free it
 	delete(hud_font.table)
 }
@@ -1478,10 +1574,10 @@ _main :: proc() {
 		swin.move(&window, wr.x + (wr.w/2 - window.w/2), wr.y + (wr.h/2 - window.h/2))
 	}
 
-	window.clear_color = SKY_BLUE.rgb
+	//window.clear_color = SKY_BLUE.rgb
 	window.event_handler = event_handler
-	//swin.set_resizable(&window, true)
-	swin.set_min_size(&window, WINDOW_W, WINDOW_H)
+	swin.set_resizable(&window, true)
+	swin.set_min_size(&window, BUFFER_W, BUFFER_H)
 
 	save_2_ints(&global_state.client_size, i32(window.client.w), i32(window.client.h))
 

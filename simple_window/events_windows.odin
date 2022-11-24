@@ -222,13 +222,15 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 			win32.TrackMouseEvent(&tme)
 		}
 
-		x := cast(i32)win32.LOWORD(cast(win32.DWORD)lparam)
-		y := cast(i32)win32.HIWORD(cast(win32.DWORD)lparam)
+		x := i16(i32(lparam) & 0xffff)
+		y := i16(i32(lparam) >> 16)
+		//x := cast(i32)win32.LOWORD(cast(win32.DWORD)lparam)
+		//y := cast(i32)win32.HIWORD(cast(win32.DWORD)lparam)
 
-		ev = Mouse_Move_Event{x, y}
+		ev = Mouse_Move_Event{x, y, false}
 	case win32.WM_MOUSELEAVE:
 		window.is_mouse_inside = false
-		ev = Mouse_Move_Event{-1, -1}
+		ev = Mouse_Move_Event{left = true}
 	case win32.WM_MOUSEWHEEL:
 		delta := win32.GET_WHEEL_DELTA_WPARAM(wparam) / 120
 		ev = Mouse_Wheel_Event{

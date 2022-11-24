@@ -48,7 +48,8 @@ Mouse_Button_Event :: struct {
 }
 
 Mouse_Move_Event :: struct {
-	x, y: i32,
+	x, y: i16,
+	left: bool,
 }
 
 Mouse_Wheel_Event :: struct {

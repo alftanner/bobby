@@ -48,8 +48,18 @@ color :: proc(r, g, b, a: u8) -> Color {
 		return {r, g, b, a}
 	}
 }
+
+pixel_mod :: proc(dst: ^Color, mod: Color) {
+	dst.r = u8(cast(f32)dst.r * (cast(f32)mod.r / 255))
+	dst.g = u8(cast(f32)dst.g * (cast(f32)mod.g / 255))
+	dst.b = u8(cast(f32)dst.b * (cast(f32)mod.b / 255))
+}
+
 // draw every pixel by blending
-draw_from_texture :: proc(dst: ^Texture2D, src: Texture2D, startx, starty: int, src_rect: Rect, flip: Flip = .None) {
+draw_from_texture :: proc(dst: ^Texture2D, src: Texture2D, startx, starty: int, src_rect: Rect, flip: Flip = .None, mod: image.RGB_Pixel = {255, 255, 255}) {
+	needs_mod := mod != {255, 255, 255}
+	mod_color := color(mod.r, mod.g, mod.b, 0)
+
 	endx := min(startx + src_rect.w, dst.w)
 	endy := min(starty + src_rect.h, dst.h)
 
@@ -60,7 +70,9 @@ draw_from_texture :: proc(dst: ^Texture2D, src: Texture2D, startx, starty: int, 
 
 		sp := (src_rect.y + spy) * src.w + (src_rect.x + spx)
 		dp := y * dst.w + x
-		blend_pixel(&dst.pixels[dp], src.pixels[sp])
+		src_pixel := src.pixels[sp]
+		if needs_mod do pixel_mod(&src_pixel, mod_color)
+		blend_pixel(&dst.pixels[dp], src_pixel)
 	}
 }
 
