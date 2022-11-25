@@ -6,6 +6,7 @@ import win32 "core:sys/windows"
 
 Window_OS_Specific :: struct {
 	id: win32.HWND,
+	icon: win32.HICON,
 }
 
 // need to store pointer to the window for _default_window_proc
@@ -94,6 +95,11 @@ _create :: proc "contextless" (window: ^Window, w, h: int, title: string, flags:
 		},
 		flags = flags, dec_w = dec_w, dec_h = dec_h,
 		is_focused = is_focused,
+	}
+
+	window.icon = win32.LoadIconW(instance, win32.L("icon"))
+	if window.icon != nil {
+		win32.SetClassLongPtrW(winid, win32.GCLP_HICON, auto_cast cast(uintptr)window.icon)
 	}
 
 	window_handle = window

@@ -8,7 +8,6 @@ import "core:math"
 //import "core:math/ease"
 import "core:container/small_array"
 import "core:strconv"
-import "core:strings"
 import "core:image"
 import _ "core:image/png"
 import "core:bytes"
@@ -64,13 +63,17 @@ Direction :: enum {
 	Up,
 }
 
-Position_Queue :: small_array.Small_Array(256, [2]int) // max animations on the screen
-Region_Cache :: small_array.Small_Array(64, swin.Rect) // redraw regions
+Sprite :: swin.Rect
 
-Sprite :: struct {
-	using rect: swin.Rect,
-	origin: [2]int,
+Sprite_Offset :: struct {
+	using rect: Sprite,
+	offset: [2]int,
 }
+
+// redraw regions
+Region_Cache :: small_array.Small_Array(128, swin.Rect)
+// max tiles changed in an update
+Tile_Queue :: small_array.Small_Array(256, Sprite_Offset)
 
 Pos :: struct {
 	using pos: [2]int,
@@ -86,7 +89,7 @@ Animation :: struct {
 
 Player :: struct {
 	using position: Pos,
-	sprite: Sprite,
+	sprite: Sprite_Offset,
 	direction: Direction,
 
 	walking: Animation,
@@ -266,13 +269,13 @@ HUD_Sprites :: enum {
 }
 
 hud_sprites: [HUD_Sprites]Sprite = {
-	.Carrot     = {{128, 80, 14, 13},{}},
-	.Egg        = {{142, 80, 9,  13},{}},
-	.Eyes       = {{151, 80, 15, 13},{}},
-	.Silver_Key = {{166, 80, 8,  13},{}},
-	.Golden_Key = {{174, 80, 8,  13},{}},
-	.Copper_Key = {{182, 80, 8,  13},{}},
-	.Success    = {{128, 93, 54, 13},{}},
+	.Carrot     = {128, 80, 14, 13},
+	.Egg        = {142, 80, 9,  13},
+	.Eyes       = {151, 80, 15, 13},
+	.Silver_Key = {166, 80, 8,  13},
+	.Golden_Key = {174, 80, 8,  13},
+	.Copper_Key = {182, 80, 8,  13},
+	.Success    = {128, 93, 54, 13},
 }
 
 grass_sprites: map[bit_set[Direction]]Sprites = {
@@ -319,13 +322,13 @@ belt_switch: map[Tiles]Tiles = {
 	.Belt_Down = .Belt_Up,
 }
 
-idling_animation := [?]Sprite {
+idling_animation := [?]Sprite_Offset {
 	{{0,  96, 18, 25}, {-1, -9}},
 	{{18, 96, 18, 25}, {-1, -9}},
 	{{36, 96, 18, 25}, {-1, -9}},
 }
 
-walking_animation := [?]Sprite {
+walking_animation := [?]Sprite_Offset {
 	{{54,  121, 18, 25}, {-1, -9}},
 	{{72,  121, 18, 25}, {-1, -9}},
 	{{90,  121, 18, 25}, {-1, -9}},
@@ -337,7 +340,7 @@ walking_animation := [?]Sprite {
 }
 WALKING_ANIM_LEN :: len(walking_animation) when !ODIN_DEBUG else 6 // speed walking during debug
 
-dying_animation := [?]Sprite {
+dying_animation := [?]Sprite_Offset {
 	{{0,   247, 22, 27}, {-3, -11}},
 	{{22,  247, 22, 27}, {-3, -11}},
 	{{44,  247, 22, 27}, {-3, -11}},
@@ -348,7 +351,7 @@ dying_animation := [?]Sprite {
 	{{154, 247, 22, 27}, {-3, -11}},
 }
 
-fading_animation := [?]Sprite {
+fading_animation := [?]Sprite_Offset {
 	{{0,   221, 18, 25}, {-1, -9}},
 	{{18,  221, 18, 25}, {-1, -9}},
 	{{36,  221, 18, 25}, {-1, -9}},
@@ -358,21 +361,20 @@ fading_animation := [?]Sprite {
 	{{108, 221, 18, 25}, {-1, -9}},
 	{{126, 221, 18, 25}, {-1, -9}},
 	{{144, 221, 18, 25}, {-1, -9}},
-	{{162, 221, 18, 25}, {-1, -9}},
 }
 
 end_animation := [?]Sprite {
-	{{64,  80, 16, 16},{}},
-	{{80,  80, 16, 16},{}},
-	{{96,  80, 16, 16},{}},
-	{{112, 80, 16, 16},{}},
+	{64,  80, 16, 16},
+	{80,  80, 16, 16},
+	{96,  80, 16, 16},
+	{112, 80, 16, 16},
 }
 
 belt_animation := [?]Sprite {
-	{{0,  64, 16, 16},{}},
-	{{16, 64, 16, 16},{}},
-	{{32, 64, 16, 16},{}},
-	{{48, 64, 16, 16},{}},
+	{0,  64, 16, 16},
+	{16, 64, 16, 16},
+	{32, 64, 16, 16},
+	{48, 64, 16, 16},
 }
 
 save_2_ints :: #force_inline proc(p: ^i64, a, b: i32) {
@@ -412,8 +414,8 @@ measure_or_draw_text :: proc(canvas: ^swin.Texture2D, font: Font, text: string, 
 
 		glyph_pos := font.table[ch] or_else font.table['?']
 		if !no_draw {
-			swin.draw_from_texture(canvas, font.texture, pos.x + 1, pos.y + 1, {glyph_pos.x, glyph_pos.y, font.glyph_size.w, font.glyph_size.h}, .None, {})
-			swin.draw_from_texture(canvas, font.texture, pos.x, pos.y, {glyph_pos.x, glyph_pos.y, font.glyph_size.w, font.glyph_size.h})
+			swin.draw_from_texture(canvas, font.texture, pos + 1, {glyph_pos.x, glyph_pos.y, font.glyph_size.w, font.glyph_size.h}, .None, {})
+			swin.draw_from_texture(canvas, font.texture, pos, {glyph_pos.x, glyph_pos.y, font.glyph_size.w, font.glyph_size.h})
 		}
 
 		pos.x += font.glyph_size.w + 1
@@ -504,9 +506,9 @@ interpolate_smooth_position :: #force_inline proc(frame_pos, tick_time: time.Dur
 
 /*
 TODO:
-save time and steps
-show game end screen
 menu
+show game end screen
+save time and steps
 */
 
 get_sprite_from_tile :: proc(pos: [2]int) -> Sprite {
@@ -558,20 +560,18 @@ get_sprite_from_tile :: proc(pos: [2]int) -> Sprite {
 	return sprite
 }
 
-draw_level_incrementally :: proc(t: ^swin.Texture2D, q: ^Position_Queue) {
+collect_level_updates :: proc(q: ^Tile_Queue) {
 	for changed, idx in &world.level.changes {
-		x := idx%world.level.w
-		y := idx/world.level.w
-		tile := get_level_tile({x, y})
+		pos: [2]int = {idx%world.level.w, idx/world.level.w}
+		tile := get_level_tile(pos)
 
 		if !changed && tile not_in belt_tiles && !(world.level.can_end && tile == .End) {
 			continue
 		}
 
-		sprite := get_sprite_from_tile({x, y})
-		swin.draw_from_texture(t, atlas, x * TILE_SIZE, y * TILE_SIZE, sprite)
 		changed = false
-		small_array.push_back(q, [2]int{x, y})
+		sprite := get_sprite_from_tile(pos)
+		small_array.push_back(q, Sprite_Offset{sprite, pos})
 	}
 }
 
@@ -582,11 +582,9 @@ draw_level :: proc(t: ^swin.Texture2D) {
 
 	t^ = swin.texture_make(world.level.w * TILE_SIZE, world.level.h * TILE_SIZE)
 	for _, idx in world.level.tiles {
-		x := idx%world.level.w
-		y := idx/world.level.w
-
-		sprite := get_sprite_from_tile({x, y})
-		swin.draw_from_texture(t, atlas, x * TILE_SIZE, y * TILE_SIZE, sprite)
+		pos: [2]int = {idx%world.level.w, idx/world.level.w}
+		sprite := get_sprite_from_tile(pos)
+		swin.draw_from_texture(t, atlas, pos * TILE_SIZE, sprite)
 	}
 }
 
@@ -610,7 +608,7 @@ render :: proc(window: ^swin.Window) {
 	diff: [2]f32
 	full_redraw, level_ended: bool
 	level_texture: swin.Texture2D
-	tiles_updated: Position_Queue
+	tiles_updated: Tile_Queue
 	canvas_cache: Region_Cache
 	carrots, steps: int
 	level_current, level_next: int
@@ -620,27 +618,14 @@ render :: proc(window: ^swin.Window) {
 	canvas := swin.texture_make(TILES_W * TILE_SIZE, TILES_H * TILE_SIZE)
 	background := swin.texture_make((TILES_W + 1) * TILE_SIZE, (TILES_H + 1) * TILE_SIZE)
 	for y in 0..=TILES_H do for x in 0..=TILES_W {
-		swin.draw_from_texture(&background, atlas, x * TILE_SIZE, y * TILE_SIZE, sprites[.Grass])
+		pos: [2]int = {x, y}
+		swin.draw_from_texture(&background, atlas, pos * TILE_SIZE, sprites[.Grass])
 	}
-
-	//clear_color := swin.color(expand_to_tuple(SKY_BLUE))
 
 	for {
 		start_tick := time.tick_now()
 
 		client_w, client_h := get_2_ints(&global_state.client_size)
-		/*
-		tw := int(math.ceil(f32(client_w) / TILE_SIZE)) + 1
-		th := int(math.ceil(f32(client_h) / TILE_SIZE)) + 1
-
-		if tw * TILE_SIZE != background.w || th * TILE_SIZE != background.h {
-			swin.texture_destroy(background)
-			background = swin.texture_make(tw * TILE_SIZE, th * TILE_SIZE)
-			for y in 0..=th do for x in 0..=tw {
-				swin.draw_from_texture(&background, atlas, x * TILE_SIZE, y * TILE_SIZE, sprites[.Grass])
-			}
-		}
-		*/
 
 		if sync.atomic_load(&world.updated) {
 			sync.guard(&world.lock)
@@ -652,7 +637,7 @@ render :: proc(window: ^swin.Window) {
 				world.level.changed = false
 				full_redraw = true
 			}
-			draw_level_incrementally(&level_texture, &tiles_updated)
+			collect_level_updates(&tiles_updated)
 			diff = {f32(TILES_W - world.level.w), f32(TILES_H - world.level.h)}
 			player = world.player
 			carrots = world.level.carrots
@@ -669,11 +654,10 @@ render :: proc(window: ^swin.Window) {
 		}
 
 		if menu {
-			TITLE_SCREEN :: Sprite{{0, 274, 128, 128},{}}
-			swin.draw_from_texture(&canvas, background, 0, 0, {0, 0, canvas.w, canvas.h})
-			off_x := (canvas.w - TITLE_SCREEN.w) / 2
-			off_y := (canvas.h - TITLE_SCREEN.h) / 2
-			swin.draw_from_texture(&canvas, atlas, off_x, off_y, TITLE_SCREEN)
+			TITLE_SCREEN :: Sprite{0, 274, 128, 128}
+			swin.draw_from_texture(&canvas, background, {}, {0, 0, canvas.w, canvas.h})
+			off: [2]int = {(canvas.w - TITLE_SCREEN.w) / 2, (canvas.h - TITLE_SCREEN.h) / 2}
+			swin.draw_from_texture(&canvas, atlas, off, TITLE_SCREEN)
 		} else {
 			frame_pos := f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now())))
 			player_pos := interpolate_tile_position(frame_pos, tick_time, player)
@@ -717,44 +701,57 @@ render :: proc(window: ^swin.Window) {
 			lvl_rect: swin.Rect = {0, 0, level_texture.w, level_texture.h}
 			lvl_region: swin.Rect = {int(offset.x * TILE_SIZE), int(offset.y * TILE_SIZE), lvl_rect.w, lvl_rect.h}
 
+			{ // draw updated tiles to texture
+				tiles_len := tiles_updated.len
+				for tiles_len > 0 {
+					tile := small_array.pop_back(&tiles_updated)
+					tiles_len -= 1
+					swin.draw_from_texture(&level_texture, atlas, tile.offset * TILE_SIZE, tile)
+					small_array.push_front(&tiles_updated, tile)
+				}
+			}
+
 			if full_redraw {
 				full_redraw = false
 				small_array.clear(&canvas_cache)
 				small_array.clear(&tiles_updated)
 				if draw_background {
-					swin.draw_from_texture(&canvas, background, bg_region.x, bg_region.y, bg_rect)
+					swin.draw_from_texture(&canvas, background, {bg_region.x, bg_region.y}, bg_rect)
 				}
-				swin.draw_from_texture(&canvas, level_texture, lvl_region.x, lvl_region.y, lvl_rect)
+				swin.draw_from_texture(&canvas, level_texture, {lvl_region.x, lvl_region.y}, lvl_rect)
 			} else { // cached rendering
 				for canvas_cache.len > 0 {
 					cache_region := small_array.pop_back(&canvas_cache)
 					region: swin.Rect
 					region = region_intersection(bg_region, cache_region)
 					if region.w > 0 && region.h > 0 {
-						swin.draw_from_texture(&canvas, background, region.x, region.y, {region.x + bg_rect.x, region.y + bg_rect.y, region.w, region.h})
+						swin.draw_from_texture(&canvas, background, {region.x, region.y}, {region.x + bg_rect.x, region.y + bg_rect.y, region.w, region.h})
 					}
 					region = region_intersection(lvl_region, cache_region)
 					if region.w > 0 && region.h > 0 {
-						swin.draw_from_texture(&canvas, level_texture, region.x, region.y, {region.x - lvl_region.x, region.y - lvl_region.y, region.w, region.h})
+						swin.draw_from_texture(&canvas, level_texture, {region.x, region.y}, {region.x - lvl_region.x, region.y - lvl_region.y, region.w, region.h})
 					}
 				}
 
-				// draw updated tiles
+				// draw updated tiles to canvas
 				for tiles_updated.len > 0 {
-					pos := small_array.pop_back(&tiles_updated)
-					x, y := pos.x * TILE_SIZE, pos.y * TILE_SIZE
-					swin.draw_from_texture(&canvas, level_texture, x + lvl_region.x, y + lvl_region.y, {x, y, TILE_SIZE, TILE_SIZE})
+					tile := small_array.pop_back(&tiles_updated)
+					pos := tile.offset * TILE_SIZE
+					swin.draw_from_texture(&canvas, level_texture, {pos.x + lvl_region.x, pos.y + lvl_region.y}, {pos.x, pos.y, TILE_SIZE, TILE_SIZE})
 				}
 			}
 
-			// draw player
-			pos := (player_pos + offset) * TILE_SIZE
-			px := int(pos.x) + player.sprite.origin.x
-			py := int(pos.y) + player.sprite.origin.y
-			swin.draw_from_texture(&canvas, atlas, px, py, player.sprite)
-			small_array.push_back(&canvas_cache, swin.Rect{px, py, player.sprite.w, player.sprite.h})
+			if !level_ended || (level_ended && player.fading.state) {
+				// draw player
+				pos := (player_pos + offset) * TILE_SIZE
+				px := int(pos.x) + player.sprite.offset.x
+				py := int(pos.y) + player.sprite.offset.y
+				swin.draw_from_texture(&canvas, atlas, {px, py}, player.sprite)
+				small_array.push_back(&canvas_cache, swin.Rect{px, py, player.sprite.w, player.sprite.h})
+			}
 
-			if !level_ended { // HUD
+			// HUD
+			if !level_ended {
 				// left part
 				{
 					tbuf: [8]byte
@@ -772,49 +769,52 @@ render :: proc(window: ^swin.Window) {
 				}
 				// right part
 				{
-					x := canvas.w - 2
-					y := 2
+					pos: [2]int = {canvas.w - 2, 2}
 
 					carrot_sprite := hud_sprites[.Carrot]
-					x -= carrot_sprite.w
-					swin.draw_from_texture(&canvas, atlas, x, 2, carrot_sprite)
-					small_array.push_back(&canvas_cache, swin.Rect{x, y, carrot_sprite.w, carrot_sprite.h})
-					x -= 2
+					pos.x -= carrot_sprite.w
+					swin.draw_from_texture(&canvas, atlas, pos, carrot_sprite)
+					small_array.push_back(&canvas_cache, swin.Rect{pos.x, pos.y, carrot_sprite.w, carrot_sprite.h})
+					pos.x -= 2
 
 					tbuf: [8]byte
 					carrots_str := strconv.itoa(tbuf[:], carrots)
 					{
 						w, _ := measure_text(hud_font, carrots_str)
-						x -= w
+						pos.x -= w
 					}
-					small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, carrots_str, {x, y + 3}))
-					y += carrot_sprite.h + 2
-					x = canvas.w - 2
+					small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, carrots_str, {pos.x, pos.y + 3}))
+					pos.y += carrot_sprite.h + 2
+					pos.x = canvas.w - 2
 
 					if player.silver_key {
 						sprite := hud_sprites[.Silver_Key]
-						x -= sprite.w
-						swin.draw_from_texture(&canvas, atlas, x, y, sprite)
-						small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
-						x -= 2
+						pos.x -= sprite.w
+						swin.draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, swin.Rect{pos.x, pos.y, sprite.w, sprite.h})
+						pos.x -= 2
 					}
 					if player.golden_key {
 						sprite := hud_sprites[.Golden_Key]
-						x -= sprite.w
-						swin.draw_from_texture(&canvas, atlas, x, y, sprite)
-						small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
-						x -= 2
+						pos.x -= sprite.w
+						swin.draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, swin.Rect{pos.x, pos.y, sprite.w, sprite.h})
+						pos.x -= 2
 					}
 					if player.copper_key {
 						sprite := hud_sprites[.Copper_Key]
-						x -= sprite.w
-						swin.draw_from_texture(&canvas, atlas, x, y, sprite)
-						small_array.push_back(&canvas_cache, swin.Rect{x, y, sprite.w, sprite.h})
-						x -= 2
+						pos.x -= sprite.w
+						swin.draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, swin.Rect{pos.x, pos.y, sprite.w, sprite.h})
+						pos.x -= 2
 					}
 				}
-			} else if !player.fading.state { // level end screen
-				x, y, total_h: int
+			}
+
+			// level end screen
+			if level_ended && !player.fading.state {
+				pos: [2]int
+				total_h: int
 				success := hud_sprites[.Success]
 				success_x := (canvas.w - success.w) / 2
 				total_h += success.h + (general_font.glyph_size.h * 2)
@@ -842,7 +842,7 @@ render :: proc(window: ^swin.Window) {
 				}
 				total_h += steps_h + (general_font.glyph_size.h * 2)
 
-				hint_str := "Press Enter to continue" // TODO: should blink ever second
+				hint_str := "Press Enter to continue"
 				hint_x, hint_h: int
 				{
 					w, h := measure_text(general_font, hint_str)
@@ -851,19 +851,19 @@ render :: proc(window: ^swin.Window) {
 				}
 				total_h += hint_h
 
-				x = (canvas.w - success.w) / 2
-				y = (canvas.w - total_h) / 2
-				swin.draw_from_texture(&canvas, atlas, x, y, success)
-				small_array.push_back(&canvas_cache, swin.Rect{x, y, success.w, success.h})
-				y += success.h + (general_font.glyph_size.h * 2)
+				pos.x = (canvas.w - success.w) / 2
+				pos.y = (canvas.w - total_h) / 2
+				swin.draw_from_texture(&canvas, atlas, pos, success)
+				small_array.push_back(&canvas_cache, swin.Rect{pos.x, pos.y, success.w, success.h})
+				pos.y += success.h + (general_font.glyph_size.h * 2)
 
-				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, time_str, {time_x, y}))
-				y += time_h + general_font.glyph_size.h
+				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, time_str, {time_x, pos.y}))
+				pos.y += time_h + general_font.glyph_size.h
 
-				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, steps_str, {steps_x, y}))
-				y += steps_h + (general_font.glyph_size.h * 2)
+				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, steps_str, {steps_x, pos.y}))
+				pos.y += steps_h + (general_font.glyph_size.h * 2)
 
-				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, hint_str, {hint_x, y}))
+				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, hint_str, {hint_x, pos.y}))
 			}
 		}
 
@@ -1018,7 +1018,9 @@ animation_start :: proc(a: ^Animation) {
 start_moving :: proc(d: Direction) {
 	world.player.direction = d
 	animation_start(&world.player.walking)
-	world.level.steps += 1
+	if !world.player.belt {
+		world.level.steps += 1
+	}
 }
 
 move_player :: #force_inline proc(d: Direction) {
@@ -1060,32 +1062,30 @@ set_level_tile :: #force_inline proc(pos: [2]int, t: Tiles) {
 
 press_red_button :: proc() {
 	for tile, idx in world.level.tiles {
-		x := idx%world.level.w
-		y := idx/world.level.w
+		pos: [2]int = {idx%world.level.w, idx/world.level.w}
 		switch {
 		case tile == .Red_Button:
-			set_level_tile({x, y}, .Red_Button_Pressed)
+			set_level_tile(pos, .Red_Button_Pressed)
 		case tile == .Red_Button_Pressed:
-			set_level_tile({x, y}, .Red_Button)
+			set_level_tile(pos, .Red_Button)
 		case tile in wall_tiles:
 			new_tile := wall_switch[tile] or_else .Egg
-			set_level_tile({x, y}, new_tile)
+			set_level_tile(pos, new_tile)
 		}
 	}
 }
 
 press_yellow_button :: proc() {
 	for tile, idx in world.level.tiles {
-		x := idx%world.level.w
-		y := idx/world.level.w
+		pos: [2]int = {idx%world.level.w, idx/world.level.w}
 		switch {
 		case tile == .Yellow_Button:
-			set_level_tile({x, y}, .Yellow_Button_Pressed)
+			set_level_tile(pos, .Yellow_Button_Pressed)
 		case tile == .Yellow_Button_Pressed:
-			set_level_tile({x, y}, .Yellow_Button)
+			set_level_tile(pos, .Yellow_Button)
 		case tile in belt_tiles:
 			new_tile := belt_switch[tile] or_else .Egg
-			set_level_tile({x, y}, new_tile)
+			set_level_tile(pos, new_tile)
 		}
 	}
 }
@@ -1272,7 +1272,6 @@ key_handler_game :: proc(key: swin.Key_Code, state: bit_set[Key_State], shift: b
 			}
 		case .R:
 			if .Pressed in state {
-				fmt.println(state)
 				animation_start(&world.player.dying)
 			}
 		case .F:
@@ -1305,7 +1304,7 @@ get_belt_sprite :: proc(frame: uint, t: Tiles) -> Sprite {
 	return sprite
 }
 
-get_walking_sprite :: proc(frame: uint) -> Sprite {
+get_walking_sprite :: proc(frame: uint) -> Sprite_Offset {
 	sprite := walking_animation[frame]
 	#partial switch world.player.direction {
 	case .Left:
@@ -1543,7 +1542,7 @@ load_resources :: proc() {
 		idx := int(s)
 		x := idx%MAX_X
 		y := idx/MAX_X
-		sprites[s] = {{x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE},{}}
+		sprites[s] = {x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE}
 	}
 }
 

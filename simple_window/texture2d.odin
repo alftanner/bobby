@@ -56,15 +56,15 @@ pixel_mod :: proc(dst: ^Color, mod: Color) {
 }
 
 // draw every pixel by blending
-draw_from_texture :: proc(dst: ^Texture2D, src: Texture2D, startx, starty: int, src_rect: Rect, flip: Flip = .None, mod: image.RGB_Pixel = {255, 255, 255}) {
+draw_from_texture :: proc(dst: ^Texture2D, src: Texture2D, pos: [2]int, src_rect: Rect, flip: Flip = .None, mod: image.RGB_Pixel = {255, 255, 255}) {
 	needs_mod := mod != {255, 255, 255}
 	mod_color := color(mod.r, mod.g, mod.b, 0)
 
-	endx := min(startx + src_rect.w, dst.w)
-	endy := min(starty + src_rect.h, dst.h)
+	endx := min(pos.x + src_rect.w, dst.w)
+	endy := min(pos.y + src_rect.h, dst.h)
 
-	for y in max(0, starty)..<endy do for x in max(0, startx)..<endx {
-		px, py := x - startx, y - starty
+	for y in max(0, pos.y)..<endy do for x in max(0, pos.x)..<endx {
+		px, py := x - pos.x, y - pos.y
 		spx := src_rect.w - px - 1 if flip == .Horizontal else px
 		spy := src_rect.h - py - 1 if flip == .Vertical else py
 
