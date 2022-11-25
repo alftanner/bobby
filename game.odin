@@ -19,7 +19,7 @@ import "core:fmt"
 import swin "simple_window"
 
 SKY_BLUE: image.RGBA_Pixel : {139, 216, 245, 255}
-GAME_TITLE :: "Bobby Carrot Classic"
+GAME_TITLE :: "Bobby Carrot Remastered"
 
 // since settings will be saved to the file, they probably should be packed
 Settings :: struct #packed {
