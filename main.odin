@@ -1,11 +1,13 @@
 package main
 
-import "core:os"
-import "core:mem"
+when ODIN_DEBUG {
+	import "core:os"
+	import "core:mem"
+	import "core:log"
+}
 import "core:fmt"
 import "core:time"
 import "core:runtime"
-import "core:log"
 
 import swin "simple_window"
 
@@ -17,7 +19,7 @@ assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Code
 
 	fmt.eprintln(error)
 
-	swin.show_message_box(.Error, "Error!", error)
+	swin.show_message_box(.Error, "Error!", fmt.tprintf("{}: {}", prefix, message))
 
 	runtime.trap()
 }
@@ -44,18 +46,6 @@ cycles_lap_time :: proc(prev: ^u64) -> u64 {
 	return cycles
 }
 
-save_data :: proc(fname: string, data: ^$T) {
-	os.write_entire_file(fname, mem.ptr_to_bytes(data, size_of(T)))
-}
-
-load_data :: proc(fname: string, data: ^$T) {
-	bytes, _ := os.read_entire_file(fname)
-	defer delete(bytes)
-
-	w := transmute(^T)(raw_data(bytes))
-	data^ = w^
-}
-
 when ODIN_OS == .Windows {
 	import win32 "core:sys/windows"
 	when ODIN_DEBUG do import pdb "pdb-1618b00" // https://github.com/DaseinPhaos/pdb
@@ -80,10 +70,9 @@ main :: proc() {
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
 
-	tracking_allocator: mem.Tracking_Allocator
-	mem.tracking_allocator_init(&tracking_allocator, context.allocator)
-
 	when ODIN_DEBUG {
+		tracking_allocator: mem.Tracking_Allocator
+		mem.tracking_allocator_init(&tracking_allocator, context.allocator)
 		context.allocator = mem.tracking_allocator(&tracking_allocator)
 	}
 
@@ -91,11 +80,13 @@ main :: proc() {
 
 	_main()
 
-	for _, leak in tracking_allocator.allocation_map {
-		log.infof("%v leaked %v bytes\n", leak.location, leak.size)
-	}
+	when ODIN_DEBUG {
+		for _, leak in tracking_allocator.allocation_map {
+			log.infof("%v leaked %v bytes\n", leak.location, leak.size)
+		}
 
-	for bf in tracking_allocator.bad_free_array {
-		log.infof("%v allocation %p was freed badly\n", bf.location, bf.memory)
+		for bf in tracking_allocator.bad_free_array {
+			log.infof("%v allocation %p was freed badly\n", bf.location, bf.memory)
+		}
 	}
 }
