@@ -11,6 +11,7 @@ minimize()
 */
 
 Window_Flag :: enum {
+	Hide_Cursor,
 	// TODO: Maximized, Minimized, Hidden(?), Fullscreen, Borderless(?)
 }
 Window_Flags :: distinct bit_set[Window_Flag; u8]
@@ -64,15 +65,15 @@ next_event :: #force_inline proc(window: ^Window) { _next_event(window) }
 
 get_working_area :: #force_inline proc() -> Rect { return _get_working_area() }
 
-move :: #force_inline proc(window: ^Window, x, y: int) { _move(window, x, y) }
+move :: #force_inline proc(window: ^Window, pos: [2]int) { _move(window, pos) }
 
-resize :: #force_inline proc(window: ^Window, w, h: int) { _resize(window, w, h) }
+resize :: #force_inline proc(window: ^Window, size: [2]int) { _resize(window, size) }
 
 set_resizable :: #force_inline proc(window: ^Window, resizable: bool) { _set_resizable(window, resizable) }
 
-set_min_size :: #force_inline proc(window: ^Window, w, h: int) {
-	window.min_w, window.min_h = w, h
-	_resize(window, window.client.w, window.client.h)
+set_min_size :: #force_inline proc(window: ^Window, size: [2]int) {
+	window.min_w, window.min_h = size[0], size[1]
+	_resize(window, window.client.size)
 }
 
 display_pixels :: #force_inline proc(window: ^Window, canvas: Texture2D, dest: Rect) { _display_pixels(window, canvas, dest) }

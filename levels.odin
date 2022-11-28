@@ -30,7 +30,7 @@ char_to_tile: map[rune]Tiles = {
 	'C' = .Copper_Lock,
 }
 
-levels: [][]string = {
+levels := [?][]string {
 	{
 		".........",
 		"...   ...",
@@ -492,5 +492,8 @@ levels: [][]string = {
 		"..... xx****  .",
 		"...............",
 	},
+}
+
+egg_levels := [?][]string {
 }
 // ⌝⌞⌜⌟

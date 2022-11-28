@@ -26,6 +26,13 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 	case win32.WM_INPUTLANGCHANGEREQUEST:
 		context = runtime.default_context()
 		fmt.printf("ICR {:x}: {:x} {:x}\n", msg, wparam, lparam)
+	case win32.WM_SETCURSOR:
+		if win32.LOWORD(u32(lparam)) == win32.HTCLIENT {
+			if .Hide_Cursor in window.flags {
+				win32.SetCursor(nil)
+				return 1
+			}
+		}
 	case win32.WM_WINDOWPOSCHANGING: // limit window size, if need be
 		pos := cast(^win32.WINDOWPOS)cast(uintptr)lparam
 
@@ -38,14 +45,14 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 		px, py := cast(int)pos.x, cast(int)pos.y
 		// correct position when resizing from top/left
 		if window.mode == .Resizing {
-			if px > window.x && window.client.w > window.min_w {
-				px = min(px, window.x + window.client.w - window.min_w)
+			if px > window.x && window.client.size[0] > window.min_w {
+				px = min(px, window.x + window.client.size[0] - window.min_w)
 			} else {
 				px = min(px, window.x)
 			}
 
-			if py > window.y && window.client.h > window.min_h {
-				py = min(py, window.y + window.client.h - window.min_h)
+			if py > window.y && window.client.size[1] > window.min_h {
+				py = min(py, window.y + window.client.size[1] - window.min_h)
 			} else {
 				py = min(py, window.y)
 			}
@@ -62,8 +69,8 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 		win32.GetClientRect(winid, &rect)
 		win32.ClientToScreen(winid, &point)
 
-		window.rect   = {cast(int)pos.x, cast(int)pos.y, cast(int)pos.cx, cast(int)pos.cy}
-		window.client = {cast(int)point.x, cast(int)point.y, cast(int)rect.right, cast(int)rect.bottom}
+		window.rect   = {{cast(int)pos.x, cast(int)pos.y}, {cast(int)pos.cx, cast(int)pos.cy}}
+		window.client = {{cast(int)point.x, cast(int)point.y}, {cast(int)rect.right, cast(int)rect.bottom}}
 	case win32.WM_SYSCOMMAND:
 		switch t := win32.GET_SC_WPARAM(wparam); t {
 		case win32.SC_SIZE:
@@ -222,15 +229,11 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 			win32.TrackMouseEvent(&tme)
 		}
 
-		x := i16(i32(lparam) & 0xffff)
-		y := i16(i32(lparam) >> 16)
-		//x := cast(i32)win32.LOWORD(cast(win32.DWORD)lparam)
-		//y := cast(i32)win32.HIWORD(cast(win32.DWORD)lparam)
-
-		ev = Mouse_Move_Event{x, y, false}
+		pos := transmute([2]i16)cast(i32)lparam
+		ev = Mouse_Move_Event{pos, false}
 	case win32.WM_MOUSELEAVE:
 		window.is_mouse_inside = false
-		ev = Mouse_Move_Event{left = true}
+		ev = Mouse_Move_Event{left_window = true}
 	case win32.WM_MOUSEWHEEL:
 		delta := win32.GET_WHEEL_DELTA_WPARAM(wparam) / 120
 		ev = Mouse_Wheel_Event{

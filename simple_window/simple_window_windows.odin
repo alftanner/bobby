@@ -20,7 +20,10 @@ _create :: proc "contextless" (window: ^Window, w, h: int, title: string, flags:
 	instance := cast(win32.HINSTANCE)win32.GetModuleHandleW(nil)
 	black_brush := cast(win32.HBRUSH)win32.GetStockObject(win32.BLACK_BRUSH)
 	icon := win32.LoadIconA(nil, win32.IDI_APPLICATION)
-	cursor := win32.LoadCursorA(nil, win32.IDC_ARROW)
+	cursor: win32.HCURSOR
+	if .Hide_Cursor not_in flags {
+		cursor = win32.LoadCursorA(nil, win32.IDC_ARROW)
+	}
 
 	window_title: win32.wstring
 	{
@@ -82,16 +85,12 @@ _create :: proc "contextless" (window: ^Window, w, h: int, title: string, flags:
 			id = winid,
 		},
 		rect = {
-			cast(int)wr.left,
-			cast(int)wr.top,
-			cast(int)wr.right - cast(int)wr.left,
-			cast(int)wr.bottom - cast(int)wr.top,
+			{cast(int)wr.left, cast(int)wr.top},
+			{cast(int)wr.right - cast(int)wr.left, cast(int)wr.bottom - cast(int)wr.top},
 		},
 		client = {
-			cast(int)point.x,
-			cast(int)point.y,
-			cast(int)cr.right,
-			cast(int)cr.bottom,
+			{cast(int)point.x, cast(int)point.y},
+			{cast(int)cr.right, cast(int)cr.bottom},
 		},
 		flags = flags, dec_w = dec_w, dec_h = dec_h,
 		is_focused = is_focused,
@@ -116,19 +115,17 @@ _get_working_area :: #force_inline proc() -> Rect {
 	winrect: win32.RECT
 	win32.SystemParametersInfoW(win32.SPI_GETWORKAREA, 0, &winrect, 0)
 	return {
-		cast(int)winrect.left,
-		cast(int)winrect.top,
-		cast(int)(winrect.right - winrect.left),
-		cast(int)(winrect.bottom - winrect.top),
+		{cast(int)winrect.left, cast(int)winrect.top},
+		{cast(int)(winrect.right - winrect.left), cast(int)(winrect.bottom - winrect.top)},
 	}
 }
 
-_move :: proc(window: ^Window, x, y: int) {
-	win32.SetWindowPos(window.id, nil, i32(x), i32(y), 0, 0, win32.SWP_NOSIZE | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE)
+_move :: proc(window: ^Window, pos: [2]int) {
+	win32.SetWindowPos(window.id, nil, i32(pos.x), i32(pos.y), 0, 0, win32.SWP_NOSIZE | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE)
 }
 
-_resize :: proc(window: ^Window, w, h: int) {
-	w, h := i32(w), i32(h)
+_resize :: proc(window: ^Window, size: [2]int) {
+	w, h := i32(size[0]), i32(size[1])
 	crect: win32.RECT = {0, 0, w, h}
 
 	style := cast(u32)win32.GetWindowLongPtrW(window.id, win32.GWL_STYLE)
@@ -157,8 +154,8 @@ _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect) {
 			biPlanes = 1,
 			biBitCount = 32,
 			biCompression = win32.BI_RGB,
-			biWidth = cast(i32)canvas.w,
-			biHeight = -cast(i32)canvas.h,
+			biWidth = cast(i32)canvas.size[0],
+			biHeight = -cast(i32)canvas.size[1],
 		},
 	}
 
@@ -172,10 +169,10 @@ _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect) {
 		dx, dy, dr, db, cw, ch: i32
 		dx = i32(dest.x)
 		dy = i32(dest.y)
-		dr = dx + i32(dest.w)
-		db = dy + i32(dest.h)
-		cw = i32(window.client.w)
-		ch = i32(window.client.h)
+		dr = dx + i32(dest.size[0])
+		db = dy + i32(dest.size[1])
+		cw = i32(window.client.size[0])
+		ch = i32(window.client.size[1])
 
 		if dx > 0 do win32.PatBlt(dc, 0, 0, dx, ch, win32.PATCOPY)
 		if dr < cw do win32.PatBlt(dc, dr, 0, cw - dr, ch, win32.PATCOPY)
@@ -185,8 +182,8 @@ _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect) {
 
 	win32.StretchDIBits(
 		dc,
-		cast(i32)dest.x, cast(i32)dest.y, cast(i32)dest.w, cast(i32)dest.h,
-		0, 0, cast(i32)canvas.w, cast(i32)canvas.h, raw_data(canvas.pixels),
+		cast(i32)dest.x, cast(i32)dest.y, cast(i32)dest.size[0], cast(i32)dest.size[1],
+		0, 0, cast(i32)canvas.size[0], cast(i32)canvas.size[1], raw_data(canvas.pixels),
 		&bitmap_info, win32.DIB_RGB_COLORS, win32.SRCCOPY,
 	)
 }

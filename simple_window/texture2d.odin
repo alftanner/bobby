@@ -18,21 +18,23 @@ Flip :: enum {
 	Both,
 }
 
-Rect :: struct {x, y, w, h: int}
+Rect :: struct {
+	using pos: [2]int,
+	size: [2]int,
+}
 
 Color :: [4]u8
 
 Texture2D :: struct {
 	pixels: []Color,
-	w, h: int,
+	size: [2]int,
 	allocator: mem.Allocator,
 }
 
 texture_make :: proc(w, h: int, allocator := context.allocator) -> (t: Texture2D) {
-	t.w = w
-	t.h = h
+	t.size = {w, h}
 	t.allocator = allocator
-	t.pixels = make([]Color, t.w * t.h, t.allocator)
+	t.pixels = make([]Color, t.size[0] * t.size[1], t.allocator)
 	return
 }
 
@@ -41,11 +43,11 @@ texture_destroy :: proc(t: ^Texture2D) {
 	t^ = {}
 }
 
-color :: proc(r, g, b, a: u8) -> Color {
+color :: #force_inline proc(p: image.RGBA_Pixel) -> Color {
 	when ODIN_OS == .Windows {
-		return {b, g, r, a}
+		return p.bgra
 	} else {
-		return {r, g, b, a}
+		return p
 	}
 }
 
@@ -58,18 +60,18 @@ pixel_mod :: proc(dst: ^Color, mod: Color) {
 // draw every pixel by blending
 draw_from_texture :: proc(dst: ^Texture2D, src: Texture2D, pos: [2]int, src_rect: Rect, flip: Flip = .None, mod: image.RGB_Pixel = {255, 255, 255}) {
 	needs_mod := mod != {255, 255, 255}
-	mod_color := color(mod.r, mod.g, mod.b, 0)
+	mod_color := color({mod.r, mod.g, mod.b, 0})
 
-	endx := min(pos.x + src_rect.w, dst.w)
-	endy := min(pos.y + src_rect.h, dst.h)
+	endx := min(pos.x + src_rect.size[0], dst.size[0])
+	endy := min(pos.y + src_rect.size[1], dst.size[1])
 
 	for y in max(0, pos.y)..<endy do for x in max(0, pos.x)..<endx {
 		px, py := x - pos.x, y - pos.y
-		spx := src_rect.w - px - 1 if flip == .Horizontal else px
-		spy := src_rect.h - py - 1 if flip == .Vertical else py
+		spx := src_rect.size[0] - px - 1 if flip == .Horizontal else px
+		spy := src_rect.size[1] - py - 1 if flip == .Vertical else py
 
-		sp := (src_rect.y + spy) * src.w + (src_rect.x + spx)
-		dp := y * dst.w + x
+		sp := (src_rect.y + spy) * src.size[0] + (src_rect.x + spx)
+		dp := y * dst.size[0] + x
 		src_pixel := src.pixels[sp]
 		if needs_mod do pixel_mod(&src_pixel, mod_color)
 		blend_pixel(&dst.pixels[dp], src_pixel)
@@ -77,17 +79,17 @@ draw_from_texture :: proc(dst: ^Texture2D, src: Texture2D, pos: [2]int, src_rect
 }
 
 draw_rect :: proc(dst: ^Texture2D, rect: Rect, color: Color, filled: bool = true) {
-	endx := min(rect.x + rect.w, dst.w)
-	endy := min(rect.y + rect.h, dst.h)
+	endx := min(rect.x + rect.size[0], dst.size[0])
+	endy := min(rect.y + rect.size[1], dst.size[1])
 
 	for y in max(0, rect.y)..<endy do for x in max(0, rect.x)..<endx {
 		if !filled {
-			if (x != rect.x && x != rect.x + rect.w - 1) && (y != rect.y && y != rect.y + rect.h - 1) {
+			if (x != rect.x && x != rect.x + rect.size[0] - 1) && (y != rect.y && y != rect.y + rect.size[1] - 1) {
 				continue
 			}
 		}
 
-		dp := y * dst.w + x
+		dp := y * dst.size[0] + x
 		blend_pixel(&dst.pixels[dp], color)
 	}
 }
