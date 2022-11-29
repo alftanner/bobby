@@ -3,9 +3,9 @@ package main
 import "core:time"
 import "core:thread"
 import "core:sync"
-//import "core:slice"
+import "core:runtime"
 import "core:math"
-//import "core:math/ease"
+import "core:slice"
 import "core:container/small_array"
 import "core:strconv"
 import "core:image"
@@ -52,6 +52,8 @@ TPS :: 30
 TPS_SECOND :: TPS
 IDLING_TIME :: TPS_SECOND * 5 // how much time before starts idling
 LAYING_DEAD_TIME :: TPS_SECOND / 3 when !ODIN_DEBUG else 0 // how much time after dying
+INTRO_LENGTH :: TPS_SECOND * 3
+FADE_LENGTH :: TPS_SECOND
 BUFFER_W :: TILES_W * TILE_SIZE
 BUFFER_H :: TILES_H * TILE_SIZE
 DEFAULT_SCALE :: 3
@@ -65,7 +67,7 @@ Font :: struct {
 }
 general_font: Font
 hud_font: Font
-atlas: swin.Texture2D
+atlas, splashes, logo: swin.Texture2D
 
 Direction :: enum {
 	None,
@@ -119,11 +121,11 @@ Player :: struct {
 Level :: struct {
 	w, h: int,
 	tiles: []Tiles,
+	current, next: int,
 
 	animation: Animation,
 	carrots: int,
 	can_end, ended: bool,
-	current, next: int,
 
 	time: time.Duration,
 	steps: int,
@@ -135,23 +137,29 @@ Level :: struct {
 
 Scene :: enum {
 	None,
+	Intro,
 	Main_Menu,
 	Pause_Menu,
 	Game,
+	End,
 }
 
 World :: struct {
 	updated: bool,
 	lock: sync.Mutex,
 
-	player: Player,
 	scene: Scene,
+	next_scene: Scene,
+
+	intro: Animation,
+	fade: Animation,
 
 	menu_options: Menu_Options,
 	selected_option: int,
 	selected_level: int,
 
 	level: Level,
+	player: Player,
 }
 world: World
 
@@ -201,7 +209,8 @@ global_state: State
 window: swin.Window
 
 RIGHT_ARROW :: Sprite{{183, 115}, {5, 9}}
-TITLE_SCREEN :: Sprite{{0, 274}, {128, 128}}
+INTRO_SPLASH :: Sprite{{0, 0}, {128, 128}}
+END_SPLASH :: Sprite{{0, 128}, {128, 128}}
 
 Tiles :: enum {
 	Grass,
@@ -544,10 +553,59 @@ draw_stats :: proc(canvas: ^swin.Texture2D) -> swin.Rect {
 	return draw_text(canvas, general_font, text, pos)
 }
 
-interpolate_tile_position :: #force_inline proc(frame_pos, tick_time: f32, p: Player) -> [2]f32 {
+draw_fade :: proc(t: ^swin.Texture2D, fade: Animation, frame_delta: f32) {
+	SECTION_LENGTH :: FADE_LENGTH / 2
+
+	section := fade.timer / SECTION_LENGTH
+	time_in_section := fade.timer % SECTION_LENGTH
+
+	delta := (f32(time_in_section) + frame_delta) / SECTION_LENGTH
+
+	alpha: u8
+	switch section {
+	case 0: // fade-out 0-255
+		alpha = u8(delta * 255)
+	case 1: // fade-in 255-0
+		alpha = 255 - u8(delta * 255)
+	case:
+		alpha = 0
+	}
+
+	swin.draw_rect(t, {{}, t.size}, {0, 0, 0, alpha})
+}
+
+draw_intro :: proc(t: ^swin.Texture2D, intro: Animation, frame_delta: f32) {
+	slice.fill(t.pixels, swin.Color{})
+	SECTION_LENGTH :: INTRO_LENGTH / 3
+
+	section := intro.timer / SECTION_LENGTH
+	time_in_section := intro.timer % SECTION_LENGTH
+
+	delta := (f32(time_in_section) + frame_delta) / SECTION_LENGTH
+
+	alpha: u8
+	switch section {
+	case 0: // fade-in 255-0
+		alpha = 255 - u8(delta * 255)
+	case:
+		alpha = 0
+	}
+
+	off := (t.size - INTRO_SPLASH.size) / 2
+	swin.draw_from_texture(t, splashes, off, INTRO_SPLASH)
+	swin.draw_rect(t, {off, INTRO_SPLASH.size}, {0, 0, 0, alpha})
+}
+
+draw_end :: proc(t: ^swin.Texture2D) {
+	slice.fill(t.pixels, swin.Color{})
+
+	off := (t.size - END_SPLASH.size) / 2
+	swin.draw_from_texture(t, splashes, off, END_SPLASH)
+}
+
+interpolate_tile_position :: #force_inline proc(p: Player, frame_delta: f32) -> [2]f32 {
 	if p.walking.state {
 		ANIM_TIME :: f32(WALKING_ANIM_FRAME_LEN * WALKING_ANIM_LEN)
-		frame_delta := frame_pos / tick_time
 		delta := (f32(p.walking.timer) + frame_delta) / ANIM_TIME
 		// even if frame was too long after the tick, we don't want to overextend the position any further than it can normally be
 		delta = min(delta, 1)
@@ -564,10 +622,10 @@ interpolate_tile_position :: #force_inline proc(frame_pos, tick_time: f32, p: Pl
 }
 
 /*
-interpolate_smooth_position :: #force_inline proc(frame_pos, tick_time: time.Duration, p: Player) -> [2]f32 {
+interpolate_smooth_position :: #force_inline proc(p: Player, frame_delta: f32) -> [2]f32 {
 	diff := p.pos - p.prev
-	x_delta := f32(frame_pos) * (f32(diff.x)/f32(tick_time))
-	y_delta := f32(frame_pos) * (f32(diff.y)/f32(tick_time))
+	x_delta := frame_delta * f32(diff.x)
+	y_delta := frame_delta * f32(diff.y)
 	x := f32(p.prev.x) + x_delta
 	y := f32(p.prev.y) + y_delta
 	return {x, y}
@@ -576,10 +634,9 @@ interpolate_smooth_position :: #force_inline proc(frame_pos, tick_time: time.Dur
 
 /*
 TODO:
-show game end screen
-egg campaign
-add scoreboard
 add credits
+add egg campaign
+add scoreboard
 add manual?
 */
 
@@ -721,33 +778,25 @@ draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, 
 	}
 }
 
-draw_menu_background :: proc(t: ^swin.Texture2D, background: swin.Texture2D, paused: bool) {
-	swin.draw_from_texture(t, background, {}, {{}, t.size})
-	if !paused {
-		off: [2]int = {(t.size[0] - TITLE_SCREEN.size[0]) / 2, (t.size[1] - TITLE_SCREEN.size[1]) / 2}
-		swin.draw_from_texture(t, atlas, off, TITLE_SCREEN)
-	}
-	swin.draw_rect(t, {{}, t.size}, {0, 0, 0, 170})
-}
-
 render :: proc(window: ^swin.Window) {
 	scene: Scene
-	player := world.player
-	menu_options := world.menu_options
-	selected_option := world.selected_option
-	level_ended := world.level.ended
-	selected_level := world.selected_level
+	intro, fade: Animation
+	menu_options: Menu_Options
+	selected_option: int
+	player: Player
+
+	carrots, steps: int
+	level_ended: bool
+	level_current: int
+	level_time: time.Duration
 
 	previous_tick: time.Tick
 	tick_time: f32
-	diff: [2]f32
+	diff, offset: [2]f32
+
 	level_texture: swin.Texture2D
 	tiles_updated: Tile_Queue
 	canvas_cache: Region_Cache
-	carrots, steps: int
-	level_current, level_next: int
-	level_time: time.Duration
-	offset: [2]f32
 
 	background := swin.texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
 	for y in 0..=TILES_H do for x in 0..=TILES_W {
@@ -775,6 +824,8 @@ render :: proc(window: ^swin.Window) {
 			collect_level_updates(&tiles_updated)
 			diff = {f32(TILES_W - world.level.w), f32(TILES_H - world.level.h)}
 			player = world.player
+			intro = world.intro
+			fade = world.fade
 
 			if scene != world.scene {
 				if world.scene == .Game {
@@ -789,16 +840,16 @@ render :: proc(window: ^swin.Window) {
 			selected_option = world.selected_option
 
 			carrots = world.level.carrots
-			level_current = world.level.current
-			level_next = world.level.next
-			level_time = world.level.time
 			steps = world.level.steps
+			level_current = world.level.current
+			level_time = world.level.time
 			level_ended = world.level.ended
-			selected_level = world.selected_level
 
 			previous_tick = global_state.previous_tick
 			tick_time = f32(time.duration_milliseconds(sync.atomic_load(&global_state.tick_time)))
 		}
+
+		frame_delta := f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now()))) / tick_time
 
 		if (scene == .Main_Menu || scene == .Pause_Menu) && !menu_redraw {
 			for cache_region in small_array.pop_back_safe(&canvas_cache) {
@@ -811,8 +862,7 @@ render :: proc(window: ^swin.Window) {
 		// If switching to pause menu - redraw the world for an extra frame.
 		// NOTE: This will cause a jitter if the player is moving too fast, but it's not that bad.
 		if scene == .Game || (scene == .Pause_Menu && menu_redraw) {
-			frame_pos := f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now())))
-			player_pos := interpolate_tile_position(frame_pos, tick_time, player)
+			player_pos := interpolate_tile_position(player, frame_delta)
 			draw_background: bool
 			old_offset := offset
 			offset = {}
@@ -1018,14 +1068,23 @@ render :: proc(window: ^swin.Window) {
 			small_array.clear(&canvas_cache)
 
 			swin.draw_from_texture(&menu_texture, canvas if scene == .Pause_Menu else background, {}, {{}, menu_texture.size})
-			if scene == .Main_Menu {
-				off := (menu_texture.size - TITLE_SCREEN.size) / 2
-				swin.draw_from_texture(&menu_texture, atlas, off, TITLE_SCREEN)
-			}
-			swin.draw_rect(&menu_texture, {{}, menu_texture.size}, {0, 0, 0, 170})
+			swin.draw_rect(&menu_texture, {{}, menu_texture.size}, {0, 0, 0, 0xaa})
 
 			swin.draw_from_texture(&canvas, menu_texture, {}, {{}, menu_texture.size})
 			draw_menu(&canvas, &canvas_cache, small_array.slice(&menu_options), selected_option)
+		}
+
+		if scene == .Intro {
+			draw_intro(&canvas, intro, frame_delta)
+		}
+
+		if scene == .End {
+			draw_end(&canvas)
+		}
+
+		if fade.state {
+			draw_fade(&canvas, fade, frame_delta)
+			small_array.push_back(&canvas_cache, swin.Rect{{}, canvas.size})
 		}
 
 		if settings.show_stats {
@@ -1174,7 +1233,7 @@ stop_idling :: proc() {
 	world.player.idle.frame = 0
 }
 
-animation_start :: proc(a: ^Animation) {
+player_animation_start :: proc(a: ^Animation) {
 	if !a.state {
 		stop_idling()
 		a.state = true
@@ -1185,7 +1244,7 @@ animation_start :: proc(a: ^Animation) {
 
 start_moving :: proc(d: Direction) {
 	world.player.direction = d
-	animation_start(&world.player.walking)
+	player_animation_start(&world.player.walking)
 	if !world.player.belt {
 		world.level.steps += 1
 	}
@@ -1276,7 +1335,7 @@ finish_level :: proc(next: int) {
 			settings.last_unlocked_level -= 1
 		}
 	}
-	animation_start(&world.player.fading)
+	player_animation_start(&world.player.fading)
 }
 
 move_player_to_tile :: proc(d: Direction) {
@@ -1329,7 +1388,7 @@ move_player_to_tile :: proc(d: Direction) {
 		set_level_tile(world.player, .Ground)
 		world.player.copper_key = false
 	case current_tile == .Trap_Activated:
-		animation_start(&world.player.dying)
+		player_animation_start(&world.player.dying)
 	case current_tile == .End:
 		if world.level.carrots == 0 {
 			finish_level(world.level.current + 1)
@@ -1343,18 +1402,28 @@ move_player_to_tile :: proc(d: Direction) {
 	}
 }
 
+switch_scene :: proc(s: Scene) {
+	world.next_scene = s
+	world.fade.state = true
+	world.fade.timer = 0
+	world.fade.frame = 0
+}
+
 main_menu_continue :: proc() {
-	load_level(settings.last_unlocked_level)
+	world.level.next = settings.last_unlocked_level
+	switch_scene(.Game)
 }
 
 main_menu_new_game :: proc() {
 	world.selected_level = 0
 	settings.last_unlocked_level = 0
-	load_level(settings.last_unlocked_level)
+	world.level.next = 0
+	switch_scene(.Game)
 }
 
 main_menu_select_level :: proc() {
-	load_level(world.selected_level)
+	world.level.next = world.selected_level
+	switch_scene(.Game)
 }
 
 main_menu_scoreboard_time :: proc() {
@@ -1369,10 +1438,10 @@ menu_sound :: proc() {
 	settings.sound = !settings.sound
 	switch world.scene {
 	case .Pause_Menu:
-		show_pause_menu(false)
+		show_pause_menu(clear = false)
 	case .Main_Menu:
-		show_main_menu(false)
-	case .None, .Game:
+		show_main_menu(clear = false)
+	case .None, .Intro, .Game, .End:
 	}
 }
 
@@ -1384,17 +1453,18 @@ main_menu_quit :: proc() {
 	window.must_close = true
 }
 
-paused_menu_continue :: proc() {
+pause_menu_continue :: proc() {
 	world.scene = .Game
 }
 
-paused_menu_restart :: proc() {
-	world.scene = .Game
-	animation_start(&world.player.dying)
+pause_menu_restart :: proc() {
+	switch_scene(.Game)
+	player_animation_start(&world.player.dying)
 }
 
-paused_menu_exit :: proc() {
-	load_level(-1)
+pause_menu_exit :: proc() {
+	world.level.next = -1
+	switch_scene(.Game)
 }
 
 menu_option_label_printf :: proc(option: ^Menu_Option, format: string, args: ..any) {
@@ -1488,6 +1558,8 @@ show_main_menu :: proc(clear := true) {
 
 	total_h += general_font.glyph_size[1]
 
+	// TODO: Campaign switch
+
 	// Manual?
 
 	{
@@ -1524,7 +1596,7 @@ show_pause_menu :: proc(clear := true) {
 
 	total_h: int
 	{
-		option: Menu_Option = {function = paused_menu_continue}
+		option: Menu_Option = {function = pause_menu_continue}
 		menu_option_label_printf(&option, "Continue")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1535,7 +1607,7 @@ show_pause_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = paused_menu_restart}
+		option: Menu_Option = {function = pause_menu_restart}
 		menu_option_label_printf(&option, "Restart level")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1559,7 +1631,7 @@ show_pause_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = paused_menu_exit}
+		option: Menu_Option = {function = pause_menu_exit}
 		menu_option_label_printf(&option, "Exit level")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1574,8 +1646,9 @@ show_pause_menu :: proc(clear := true) {
 	}
 }
 
-load_level :: proc(index: int) {
+load_level :: proc() {
 	world.scene = .Game
+	next := world.level.next
 
 	if len(world.level.tiles) != 0 {
 		delete(world.level.tiles)
@@ -1585,24 +1658,23 @@ load_level :: proc(index: int) {
 	world.player = {}
 	world.level = {}
 
-	if index >= len(levels){
-		// TODO: end sequence
-		show_main_menu()
+	if next >= len(levels){
+		world.scene = .End
 		return
-	} else if index < 0 {
+	} else if next < 0 {
 		show_main_menu()
 		return
 	}
 
-	world.level.current = index
-	world.level.next = index
-	world.level.w = len(levels[index][0])
-	world.level.h = len(levels[index])
+	world.level.current = next
+	world.level.next = next
+	world.level.w = len(levels[world.level.current][0])
+	world.level.h = len(levels[world.level.current])
 	world.level.tiles = make([]Tiles, world.level.w * world.level.h)
 	world.level.changes = make([]bool, world.level.w * world.level.h)
 	world.level.changed = true
 
-	for row, y in levels[index] {
+	for row, y in levels[world.level.current] {
 		x: int
 		for char in row {
 			tile := char_to_tile[char] or_else .Ground
@@ -1617,10 +1689,12 @@ load_level :: proc(index: int) {
 		}
 	}
 
-	animation_start(&world.player.fading)
+	player_animation_start(&world.player.fading)
 }
 
 common_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) -> (handled: bool) {
+	if world.fade.state do return true
+
 	#partial switch key {
 	case .Enter:
 		handled = true
@@ -1654,7 +1728,7 @@ pause_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	#partial switch key {
 	case .Escape:
 		if .Pressed in state {
-			paused_menu_continue()
+			pause_menu_continue()
 		}
 	}
 }
@@ -1671,7 +1745,7 @@ main_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 				if world.selected_level > settings.last_unlocked_level {
 					world.selected_level -= 1
 				}
-				show_main_menu(false)
+				show_main_menu(clear = false)
 			}
 		}
 	case .Left:
@@ -1682,9 +1756,22 @@ main_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 				if world.selected_level < 0 {
 					world.selected_level = 0
 				}
-				show_main_menu(false)
+				show_main_menu(clear = false)
 			}
 		}
+	}
+}
+
+intro_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+	if .Pressed in state {
+		show_main_menu()
+	}
+}
+
+end_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+	if .Pressed in state {
+		// TODO: switch to credits
+		switch_scene(.Main_Menu)
 	}
 }
 
@@ -1698,10 +1785,11 @@ game_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	case .Up:    move_player(.Up)
 	case .R:
 		if .Pressed in state {
+			world.level.next = world.level.current
 			if world.level.ended {
-				load_level(world.level.current)
+				load_level()
 			} else {
-				animation_start(&world.player.dying)
+				player_animation_start(&world.player.dying)
 			}
 		}
 	case .F:
@@ -1710,7 +1798,8 @@ game_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 		}
 	case .S:
 		if !world.player.fading.state {
-			load_level(world.level.current + (1 if !shift else -1))
+			world.level.next += (1 if !shift else -1)
+			load_level()
 		}
 	case .Escape:
 		if .Pressed in state {
@@ -1719,7 +1808,7 @@ game_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	case .Enter:
 		if .Pressed in state {
 			if world.level.ended && !world.player.fading.state {
-				load_level(world.level.next)
+				switch_scene(.Game)
 			}
 		}
 	}
@@ -1793,6 +1882,9 @@ menu_option_at :: proc(pos: [2]i16) -> Maybe(int) {
 }
 
 update_world :: proc(t: ^thread.Thread) {
+	world.scene = .Intro
+	world.intro.state = true
+
 	for {
 		start_tick := time.tick_now()
 
@@ -1807,12 +1899,16 @@ update_world :: proc(t: ^thread.Thread) {
 
 					switch world.scene {
 					case .None:
+					case .Intro:
+						intro_key_handler(key, state)
 					case .Main_Menu:
 						main_menu_key_handler(key, state)
 					case .Pause_Menu:
 						pause_menu_key_handler(key, state)
 					case .Game:
 						game_key_handler(key, state)
+					case .End:
+						end_key_handler(key, state)
 					}
 
 					if .Repeated in state do state -= {.Repeated}
@@ -1856,6 +1952,17 @@ update_world :: proc(t: ^thread.Thread) {
 				}
 			}
 
+			if world.scene == .Intro {
+				if world.intro.state {
+					if world.intro.timer >= INTRO_LENGTH {
+						world.intro.state = false
+						switch_scene(.Main_Menu)
+					}
+
+					world.intro.timer += 1
+				}
+			}
+
 			if world.scene == .Game {
 				// animations
 				switch {
@@ -1868,7 +1975,7 @@ update_world :: proc(t: ^thread.Thread) {
 						world.player.fading.frame = 0
 					} else {
 						if world.level.current == world.level.next {
-							// reverse frames
+							// reverse frames when spawning
 							world.player.fading.frame = len(fading_animation) - 1 - world.player.fading.frame
 						}
 						world.player.sprite = fading_animation[world.player.fading.frame]
@@ -1883,7 +1990,7 @@ update_world :: proc(t: ^thread.Thread) {
 							world.player.dying.state = false
 							world.player.dying.timer = 0
 							world.player.dying.frame = 0
-							load_level(world.level.current)
+							load_level()
 						}
 					} else {
 						world.player.sprite = dying_animation[world.player.dying.frame]
@@ -1918,7 +2025,7 @@ update_world :: proc(t: ^thread.Thread) {
 					world.player.sprite = get_walking_sprite(0)
 
 					if world.player.idle.timer > IDLING_TIME {
-						animation_start(&world.player.idle)
+						player_animation_start(&world.player.idle)
 					}
 
 					world.player.idle.timer += 1
@@ -1943,6 +2050,25 @@ update_world :: proc(t: ^thread.Thread) {
 				if !world.level.ended {
 					world.level.time += sync.atomic_load(&global_state.tick_time)
 				}
+			}
+
+			if world.fade.state {
+				// we are using frame as a counter to only do the action once
+				if world.fade.timer >= FADE_LENGTH / 2 && world.fade.frame == 0 {
+					world.scene = world.next_scene
+					world.fade.frame = 1
+					if world.scene == .Main_Menu {
+						show_main_menu()
+					}
+					if world.scene == .Game {
+						load_level()
+					}
+				}
+
+				if world.fade.timer >= FADE_LENGTH {
+					world.fade.state = false
+				}
+				world.fade.timer += 1
 			}
 
 			global_state.previous_tick = time.tick_now()
@@ -2077,43 +2203,27 @@ load_resources :: proc() {
 		pos: [2]int = {idx%MAX_X, idx/MAX_X}
 		sprites[s] = {pos * TILE_SIZE, {TILE_SIZE, TILE_SIZE}}
 	}
+
+	splashes = load_texture(#load("res/splashes.png"), image.RGBA_Pixel)
+	logo = load_texture(#load("res/logo.png"), image.RGBA_Pixel)
 }
 
-when ODIN_DEBUG {
-	free_resources :: proc() {
-		swin.texture_destroy(&atlas)
-		swin.texture_destroy(&general_font.texture)
-		delete(general_font.table)
-		// NOTE: hud_font uses the same texture as atlas so no need to free it
-		delete(hud_font.table)
-	}
-}
-
-_main :: proc() {
-	load_resources()
-	when ODIN_DEBUG {
-		defer free_resources()
+_main :: proc(allocator: runtime.Allocator) {
+	{
+		context.allocator = allocator
+		load_resources()
 	}
 
-	config_dir, err := os2.user_config_dir(context.allocator)
+	config_dir, err := os2.user_config_dir(allocator)
 	assert(err == nil && config_dir != "", "Could not find user config directory")
-	when ODIN_DEBUG {
-		defer delete(config_dir)
-	}
 
-	game_config_dir := filepath.join({config_dir, "bobby"})
-	when ODIN_DEBUG {
-		defer delete(game_config_dir)
-	}
+	game_config_dir := filepath.join({config_dir, "bobby"}, allocator)
 
 	if !os.exists(game_config_dir) {
 		os2.mkdir(game_config_dir, os2.File_Mode_Dir)
 	}
 
-	settings_location := filepath.join({game_config_dir, "settings.save"})
-	when ODIN_DEBUG {
-		defer delete(settings_location)
-	}
+	settings_location := filepath.join({game_config_dir, "settings.save"}, allocator)
 
 	if os.exists(settings_location) {
 		bytes, _ := os.read_entire_file(settings_location)
@@ -2121,8 +2231,6 @@ _main :: proc() {
 
 		json.unmarshal(bytes, &settings)
 	}
-
-	show_main_menu()
 
 	// Open window
 	assert(swin.create(&window, WINDOW_W, WINDOW_H, GAME_TITLE, {} when MOUSE_SUPPORT else {.Hide_Cursor}), "Failed to create window")
@@ -2159,11 +2267,8 @@ _main :: proc() {
 
 	// NOTE: this will only trigger on a proper quit, not on a task termination
 	{
-		data, err := json.marshal(settings, {pretty = true})
+		data, err := json.marshal(settings, {pretty = true}, allocator)
 		assert(err == nil, fmt.tprint("Unable to save the game:", err))
-		when ODIN_DEBUG {
-			defer delete(data)
-		}
 
 		ok := os.write_entire_file(settings_location, data)
 		assert(ok, fmt.tprint("Unable to save the game"))

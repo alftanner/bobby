@@ -69,6 +69,7 @@ main :: proc() {
 
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
+	default_allocator := context.allocator
 
 	when ODIN_DEBUG {
 		tracking_allocator: mem.Tracking_Allocator
@@ -78,7 +79,7 @@ main :: proc() {
 
 	make_scheduler_precise()
 
-	_main()
+	_main(default_allocator)
 
 	when ODIN_DEBUG {
 		for _, leak in tracking_allocator.allocation_map {
