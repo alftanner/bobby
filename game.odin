@@ -2204,9 +2204,14 @@ update_world :: proc(t: ^thread.Thread) {
 			}
 
 			if world.fade.state {
-				// we are using fade.frame as a boolean to only do the action once
-				if world.fade.timer >= FADE_LENGTH / 2 && world.fade.frame == 0 {
-					world.fade.frame = 1
+				old_section := world.fade.timer / (FADE_LENGTH / 2)
+				if world.fade.timer >= FADE_LENGTH {
+					world.fade.state = false
+				}
+				world.fade.timer += 1
+
+				section := world.fade.timer / (FADE_LENGTH / 2)
+				if section != old_section && old_section == 0 {
 					switch world.next_scene {
 					case .Main_Menu:
 						show_main_menu()
@@ -2220,11 +2225,6 @@ update_world :: proc(t: ^thread.Thread) {
 						world.scene = world.next_scene
 					}
 				}
-
-				if world.fade.timer >= FADE_LENGTH {
-					world.fade.state = false
-				}
-				world.fade.timer += 1
 			}
 
 			if world.credits.state {
