@@ -20,7 +20,6 @@ import "core:encoding/json"
 
 import swin "simple_window"
 
-MOUSE_SUPPORT :: true
 SKY_BLUE: image.RGBA_Pixel : {139, 216, 245, 255}
 GAME_TITLE :: "Bobby Carrot Remastered"
 
@@ -177,17 +176,9 @@ Key_State :: enum {
 	Released,
 }
 
-Mouse_State :: enum {
-	Clicked,
-	Double_Clicked,
-	Held,
-	Released,
-}
-
 State :: struct {
 	// TODO: i128 with atomic_load/store
 	client_size: i64,
-	mouse_pos: i32,
 
 	// _work shows how much time was spent on actual work in that frame before sleep
 	// _time shows total time of the frame, sleep included
@@ -198,17 +189,6 @@ State :: struct {
 	keyboard: struct {
 		lock: sync.Mutex,
 		keys: [swin.Key_Code]bit_set[Key_State],
-	},
-
-	mouse: struct {
-		lock: sync.Mutex,
-		buttons: [swin.Mouse_Button]bit_set[Mouse_State],
-	},
-
-	mouse_move: struct {
-		lock: sync.Mutex,
-		moved: bool,
-		pos: [2]i16,
 	},
 }
 global_state: State
@@ -2114,44 +2094,6 @@ update_world :: proc(t: ^thread.Thread) {
 				}
 			}
 
-			when MOUSE_SUPPORT {
-				{ // mouse buttons
-					sync.guard(&global_state.mouse.lock)
-					for state, button in &global_state.mouse.buttons {
-						if state == {} do continue
-
-						if world.scene == .Main_Menu || world.scene == .Pause_Menu {
-							mouse_pos := get_from_i32(&global_state.mouse_pos)
-							if button == .Left && .Clicked in state {
-								if idx, arrow := menu_option_at(mouse_pos); idx != nil {
-									world.selected_option = idx.?
-									if a, ok := arrow.?; ok {
-										common_menu_key_handler(.Left if a == 0 else .Right, {.Pressed})
-									} else {
-										common_menu_key_handler(.Enter, {.Pressed})
-									}
-								}
-							}
-						}
-
-						if .Double_Clicked in state do state -= {.Double_Clicked}
-						if .Clicked in state do state -= {.Clicked}
-						if .Released in state do state = {}
-					}
-				}
-
-				// mouse movement
-				if sync.atomic_load(&global_state.mouse_move.moved) {
-					sync.guard(&global_state.mouse_move.lock)
-					defer sync.atomic_store(&global_state.mouse_move.moved, false)
-					pos := global_state.mouse_move.pos
-
-					if idx, arrow := menu_option_at(pos); idx != nil {
-						world.selected_option = idx.?
-					}
-				}
-			}
-
 			if world.scene == .Intro {
 				if world.intro.state {
 					if world.intro.timer >= INTRO_LENGTH {
@@ -2351,31 +2293,7 @@ event_handler :: proc(window: ^swin.Window, event: swin.Event) {
 			}
 		}
 	case swin.Mouse_Button_Event:
-		when MOUSE_SUPPORT {
-			sync.guard(&global_state.mouse.lock)
-			state := global_state.mouse.buttons[ev.button]
-
-			if ev.clicked {
-				state += {.Clicked, .Held}
-			} else {
-				state += {.Released}
-			}
-
-			if ev.double_clicked {
-				state += {.Double_Clicked}
-			}
-
-			global_state.mouse.buttons[ev.button] = state
-		}
 	case swin.Mouse_Move_Event:
-		when MOUSE_SUPPORT {
-			save_to_i32(&global_state.mouse_pos, ev.pos)
-
-			sync.guard(&global_state.mouse_move.lock)
-			defer sync.atomic_store(&global_state.mouse_move.moved, true)
-
-			global_state.mouse_move.pos = ev.pos
-		}
 	case swin.Mouse_Wheel_Event:
 	}
 }
@@ -2454,7 +2372,7 @@ _main :: proc(allocator: runtime.Allocator) {
 	}
 
 	// Open window
-	assert(swin.create(&window, WINDOW_W, WINDOW_H, GAME_TITLE, {} when MOUSE_SUPPORT else {.Hide_Cursor}), "Failed to create window")
+	assert(swin.create(&window, WINDOW_W, WINDOW_H, GAME_TITLE, {.Hide_Cursor}), "Failed to create window")
 	defer swin.destroy(&window)
 
 	{ // center the window
