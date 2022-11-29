@@ -88,10 +88,13 @@ Sprite_Offset :: struct {
 
 Menu_Option :: struct {
 	using rect: swin.Rect,
-	function: proc(),
+	func: proc(),
 	name_buf: [32]byte,
 	name_len: int,
-	arrows: Maybe([2]bool),
+	arrows: Maybe([2]struct {
+		enabled: bool,
+		func: proc(bool),
+	}),
 }
 
 // redraw regions
@@ -658,6 +661,7 @@ interpolate_smooth_position :: #force_inline proc(p: Player, frame_delta: f32) -
 TODO:
 complete egg campaign
 add scoreboard
+add translations
 add manual?
 */
 
@@ -774,7 +778,7 @@ draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, 
 		x := option.x
 		if option.arrows != nil {
 			color := color
-			if !option.arrows.?[0] {
+			if !option.arrows.?[0].enabled {
 				color = DISABLED
 			}
 			swin.draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .Horizontal, color)
@@ -788,7 +792,7 @@ draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, 
 
 		if option.arrows != nil {
 			color := color
-			if !option.arrows.?[1] {
+			if !option.arrows.?[1].enabled {
 				color = DISABLED
 			}
 			x += option.size[0] + 2
@@ -1376,18 +1380,9 @@ finish_level :: proc(next: int) {
 	world.level.ended = true
 	world.level.next = next
 	last_unlocked_level := &settings.last_unlocked_levels[world.campaign]
+	levels_len := len(levels) if world.campaign == .Carrot_Harvest else len(egg_levels)
 	if world.level.next > last_unlocked_level^ {
 		last_unlocked_level^ = world.level.next
-		switch world.campaign {
-		case .Carrot_Harvest:
-			if last_unlocked_level^ >= len(levels) {
-				last_unlocked_level^ -= 1
-			}
-		case .Easter_Eggs:
-			if last_unlocked_level^ >= len(egg_levels) {
-				last_unlocked_level^ -= 1
-			}
-		}
 	}
 	player_animation_start(&world.player.fading)
 }
@@ -1536,6 +1531,34 @@ pause_menu_continue :: proc() {
 	world.scene = .Game
 }
 
+select_level_prev :: proc(enabled: bool) {
+	if !enabled do return
+
+	world.selected_levels[world.campaign] -= 1
+	show_main_menu(clear = false)
+}
+
+select_level_next :: proc(enabled: bool) {
+	if !enabled do return
+
+	world.selected_levels[world.campaign] += 1
+	show_main_menu(clear = false)
+}
+
+select_campaign_prev :: proc(enabled: bool) {
+	if !enabled do return
+
+	world.campaign -= Campaign(1)
+	show_main_menu(clear = false)
+}
+
+select_campaign_next :: proc(enabled: bool) {
+	if !enabled do return
+
+	world.campaign += Campaign(1)
+	show_main_menu(clear = false)
+}
+
 restart_level :: proc() {
 	if world.player.fading.state do return
 
@@ -1565,8 +1588,11 @@ show_main_menu :: proc(clear := true) {
 	small_array.clear(&world.menu_options)
 
 	total_h: int
-	if settings.last_unlocked_levels[world.campaign] > 0 {
-		option: Menu_Option = {function = main_menu_continue}
+
+	last_unlocked_level := settings.last_unlocked_levels[world.campaign]
+	levels_len := len(levels) if world.campaign == .Carrot_Harvest else len(egg_levels)
+	if last_unlocked_level > 0 && last_unlocked_level < levels_len - 1 {
+		option: Menu_Option = {func = main_menu_continue}
 		menu_option_label_printf(&option, "Continue")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1577,7 +1603,7 @@ show_main_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = main_menu_new_game}
+		option: Menu_Option = {func = main_menu_new_game}
 		menu_option_label_printf(&option, "New game")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1588,20 +1614,31 @@ show_main_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = main_menu_select_level}
-		menu_option_label_printf(&option, "Select level: {}", world.selected_levels[world.campaign] + 1)
+		option: Menu_Option = {func = main_menu_select_level}
+		selected_level := world.selected_levels[world.campaign]
+		if selected_level >= levels_len {
+			menu_option_label_printf(&option, "Select level: Ending")
+		} else {
+			menu_option_label_printf(&option, "Select level: {}", selected_level + 1)
+		}
 		total_w := option.size[0] + (RIGHT_ARROW.size[0] + 2) * 2
 		option.x = (BUFFER_W - total_w) / 2
 		option.y = total_h
 		total_h += option.size[1]
 
-		arrows: [2]bool
-		if settings.last_unlocked_levels[world.campaign] != 0 {
-			if world.selected_levels[world.campaign] > 0 {
-				arrows[0] = true
+		arrows: [2]struct {
+			enabled: bool,
+			func: proc(bool),
+		}
+		arrows[0].func = select_level_prev
+		arrows[1].func = select_level_next
+
+		if last_unlocked_level != 0 {
+			if selected_level > 0 {
+				arrows[0].enabled = true
 			}
-			if world.selected_levels[world.campaign] < settings.last_unlocked_levels[world.campaign] {
-				arrows[1] = true
+			if selected_level < last_unlocked_level - 1 {
+				arrows[1].enabled = true
 			}
 		}
 		option.arrows = arrows
@@ -1619,12 +1656,18 @@ show_main_menu :: proc(clear := true) {
 		option.y = total_h
 		total_h += option.size[1]
 
-		arrows: [2]bool
+		arrows: [2]struct {
+			enabled: bool,
+			func: proc(bool),
+		}
+		arrows[0].func = select_campaign_prev
+		arrows[1].func = select_campaign_next
+
 		if int(world.campaign) > 0 {
-			arrows[0] = true
+			arrows[0].enabled = true
 		}
 		if int(world.campaign) < len(Campaign) - 1 {
-			arrows[1] = true
+			arrows[1].enabled = true
 		}
 		option.arrows = arrows
 
@@ -1634,7 +1677,7 @@ show_main_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = main_menu_scoreboard_time}
+		option: Menu_Option = {func = main_menu_scoreboard_time}
 		menu_option_label_printf(&option, "Scoreboard (time)")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1645,7 +1688,7 @@ show_main_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = main_menu_scoreboard_steps}
+		option: Menu_Option = {func = main_menu_scoreboard_steps}
 		menu_option_label_printf(&option, "Scoreboard (steps)")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1656,7 +1699,7 @@ show_main_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = menu_sound}
+		option: Menu_Option = {func = menu_sound}
 		menu_option_label_printf(&option, "Sound: {}", settings.sound)
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1669,7 +1712,7 @@ show_main_menu :: proc(clear := true) {
 	// Manual?
 
 	{
-		option: Menu_Option = {function = main_menu_credits}
+		option: Menu_Option = {func = main_menu_credits}
 		menu_option_label_printf(&option, "Credits")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1680,7 +1723,7 @@ show_main_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = main_menu_quit}
+		option: Menu_Option = {func = main_menu_quit}
 		menu_option_label_printf(&option, "Quit")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1707,7 +1750,7 @@ show_pause_menu :: proc(clear := true) {
 
 	total_h: int
 	{
-		option: Menu_Option = {function = pause_menu_continue}
+		option: Menu_Option = {func = pause_menu_continue}
 		menu_option_label_printf(&option, "Continue")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1718,7 +1761,7 @@ show_pause_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = restart_level}
+		option: Menu_Option = {func = restart_level}
 		menu_option_label_printf(&option, "Restart level")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1731,7 +1774,7 @@ show_pause_menu :: proc(clear := true) {
 	// Help?
 
 	{
-		option: Menu_Option = {function = menu_sound}
+		option: Menu_Option = {func = menu_sound}
 		menu_option_label_printf(&option, "Sound: {}", settings.sound)
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1742,7 +1785,7 @@ show_pause_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = pause_menu_exit}
+		option: Menu_Option = {func = pause_menu_exit}
 		menu_option_label_printf(&option, "Exit level")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1829,8 +1872,8 @@ common_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) -
 		handled = true
 		if .Pressed in state {
 			option := small_array.get_ptr(&world.menu_options, world.selected_option)
-			if option.function != nil {
-				option.function()
+			if option.func != nil {
+				option.func()
 			}
 		}
 	case .Down:
@@ -1847,6 +1890,20 @@ common_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) -
 			world.selected_option -= 1
 			if world.selected_option < 0 {
 				world.selected_option = world.menu_options.len - 1
+			}
+		}
+	case .Left:
+		if state & {.Pressed, .Repeated} > {} {
+			option := small_array.get_ptr(&world.menu_options, world.selected_option)
+			if arrows, ok := option.arrows.?; ok {
+				arrows[0].func(arrows[0].enabled)
+			}
+		}
+	case .Right:
+		if state & {.Pressed, .Repeated} > {} {
+			option := small_array.get_ptr(&world.menu_options, world.selected_option)
+			if arrows, ok := option.arrows.?; ok {
+				arrows[1].func(arrows[1].enabled)
 			}
 		}
 	}
@@ -1867,45 +1924,6 @@ pause_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 
 main_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	if common_menu_key_handler(key, state) do return
-
-	#partial switch key {
-	case .Right:
-		if state & {.Pressed, .Repeated} > {} {
-			option := small_array.get_ptr(&world.menu_options, world.selected_option)
-			switch option.function {
-			case main_menu_select_level:
-				world.selected_levels[world.campaign] += 1
-				if world.selected_levels[world.campaign] > settings.last_unlocked_levels[world.campaign] {
-					world.selected_levels[world.campaign] -= 1
-				}
-				show_main_menu(clear = false)
-			case nil: // select campaign
-				world.campaign += Campaign(1)
-				if int(world.campaign) >= len(Campaign) {
-					world.campaign -= Campaign(1)
-				}
-				show_main_menu(clear = false)
-			}
-		}
-	case .Left:
-		if state & {.Pressed, .Repeated} > {} {
-			option := small_array.get_ptr(&world.menu_options, world.selected_option)
-			switch option.function {
-			case main_menu_select_level:
-				world.selected_levels[world.campaign] -= 1
-				if world.selected_levels[world.campaign] < 0 {
-					world.selected_levels[world.campaign] = 0
-				}
-				show_main_menu(clear = false)
-			case nil: // select campaign
-				world.campaign -= Campaign(1)
-				if int(world.campaign) < 0 {
-					world.campaign += Campaign(1)
-				}
-				show_main_menu(clear = false)
-			}
-		}
-	}
 }
 
 intro_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
@@ -1997,7 +2015,7 @@ get_walking_sprite :: proc(frame: uint) -> Sprite_Offset {
 	return sprite
 }
 
-menu_option_at :: proc(pos: [2]i16) -> Maybe(int) {
+menu_option_at :: proc(pos: [2]i16) -> (Maybe(int), Maybe(int)) {
 	offset: [2]int
 	scale: int
 
@@ -2012,6 +2030,19 @@ menu_option_at :: proc(pos: [2]i16) -> Maybe(int) {
 	options_slice := small_array.slice(&world.menu_options)
 	for option, idx in options_slice {
 		hitbox := option.rect
+		arrows: [2]swin.Rect
+
+		if option.arrows != nil {
+			arrows[0].x = hitbox.x
+			arrows[0].y = hitbox.y - 1
+			arrows[0].size = RIGHT_ARROW.size
+
+			hitbox.x += RIGHT_ARROW.size[0] + 2
+
+			arrows[1].x = hitbox.x + hitbox.size[0] + 2
+			arrows[1].y = arrows[0].y
+			arrows[1].size = RIGHT_ARROW.size
+		}
 
 		// make hitbox a big bigger on Y axis
 		hitbox.y -= 2
@@ -2022,12 +2053,29 @@ menu_option_at :: proc(pos: [2]i16) -> Maybe(int) {
 		hitbox.size *= scale
 		hitbox.pos += offset
 
-		if is_inside_rect({int(pos.x), int(pos.y)}, transmute(swin.Rect)hitbox) {
-			return idx
+		if is_inside_rect({int(pos.x), int(pos.y)}, hitbox) {
+			return idx, nil
+		}
+
+		if option.arrows != nil {
+			arrows[0].pos *= scale
+			arrows[0].size *= scale
+			arrows[0].pos += offset
+
+			arrows[1].pos *= scale
+			arrows[1].size *= scale
+			arrows[1].pos += offset
+
+			if is_inside_rect({int(pos.x), int(pos.y)}, arrows[0]) {
+				return idx, 0
+			}
+			if is_inside_rect({int(pos.x), int(pos.y)}, arrows[1]) {
+				return idx, 1
+			}
 		}
 	}
 
-	return nil
+	return nil, nil
 }
 
 update_world :: proc(t: ^thread.Thread) {
@@ -2075,12 +2123,15 @@ update_world :: proc(t: ^thread.Thread) {
 						if state == {} do continue
 
 						if world.scene == .Main_Menu || world.scene == .Pause_Menu {
+							mouse_pos := get_from_i32(&global_state.mouse_pos)
 							if button == .Left && .Clicked in state {
-								mouse_pos := get_from_i32(&global_state.mouse_pos)
-
-								if idx := menu_option_at(mouse_pos); idx != nil {
+								if idx, arrow := menu_option_at(mouse_pos); idx != nil {
 									world.selected_option = idx.?
-									common_menu_key_handler(.Enter, {.Pressed})
+									if a, ok := arrow.?; ok {
+										common_menu_key_handler(.Left if a == 0 else .Right, {.Pressed})
+									} else {
+										common_menu_key_handler(.Enter, {.Pressed})
+									}
 								}
 							}
 						}
@@ -2097,7 +2148,7 @@ update_world :: proc(t: ^thread.Thread) {
 					defer sync.atomic_store(&global_state.mouse_move.moved, false)
 					pos := global_state.mouse_move.pos
 
-					if idx := menu_option_at(pos); idx != nil {
+					if idx, arrow := menu_option_at(pos); idx != nil {
 						world.selected_option = idx.?
 					}
 				}
