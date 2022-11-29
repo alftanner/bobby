@@ -1380,7 +1380,6 @@ finish_level :: proc(next: int) {
 	world.level.ended = true
 	world.level.next = next
 	last_unlocked_level := &settings.last_unlocked_levels[world.campaign]
-	levels_len := len(levels) if world.campaign == .Carrot_Harvest else len(egg_levels)
 	if world.level.next > last_unlocked_level^ {
 		last_unlocked_level^ = world.level.next
 	}
@@ -2065,7 +2064,6 @@ menu_option_at :: proc(pos: [2]i16) -> (Maybe(int), Maybe(int)) {
 			arrows[1].pos *= scale
 			arrows[1].size *= scale
 			arrows[1].pos += offset
-
 			if is_inside_rect({int(pos.x), int(pos.y)}, arrows[0]) {
 				return idx, 0
 			}
