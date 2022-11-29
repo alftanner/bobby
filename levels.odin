@@ -1,5 +1,15 @@
 package main
 
+Campaign :: enum {
+	Carrot_Harvest,
+	Easter_Eggs,
+}
+
+campaign_names: map[Campaign]string = {
+	.Carrot_Harvest = "Carrot Harvest",
+	.Easter_Eggs = "Easter Eggs",
+}
+
 char_to_tile: map[rune]Tiles = {
 	'.' = .Grass,
 	' ' = .Ground,
@@ -28,6 +38,8 @@ char_to_tile: map[rune]Tiles = {
 	'G' = .Golden_Lock,
 	'c' = .Copper_Key,
 	'C' = .Copper_Lock,
+	'e' = .Egg_Spot,
+	'E' = .Egg,
 }
 
 levels := [?][]string {
@@ -495,5 +507,33 @@ levels := [?][]string {
 }
 
 egg_levels := [?][]string {
+	{
+		".......",
+		".. @ ..",
+		".     .",
+		".e=== .",
+		".e=== .",
+		".eeeee.",
+		".eeeee.",
+		".eeoee.",
+		".eeeee.",
+		".......",
+	},
+	{
+		"..........",
+		"..   @....",
+		"..    ....",
+		"..  ......",
+		"..⌞⌝......",
+		"..⌞⌟......",
+		".Ye eeeee.",
+		".x  e<e ⌝.",
+		"..⌞⌝......",
+		"..⌞⌟......",
+		"..⌞⌟......",
+		".     ....",
+		".  o  ....",
+		"..........",
+	},
 }
 // ⌝⌞⌜⌟

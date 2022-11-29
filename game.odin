@@ -31,8 +31,9 @@ Settings :: struct #packed {
 	show_stats: bool,
 
 	sound: bool,
-	last_unlocked_level: int,
+	last_unlocked_levels: [Campaign]int,
 
+	// TODO: scoreboards for each campaigns
 	scoreboard_time: [len(levels)]time.Duration,
 	scoreboard_steps: [len(levels)]int,
 }
@@ -41,7 +42,6 @@ default_settings: Settings : {
 	vsync = true,
 	show_stats = true when ODIN_DEBUG else false,
 	sound = true,
-	last_unlocked_level = 0,
 }
 settings: Settings = default_settings
 
@@ -53,7 +53,9 @@ TPS_SECOND :: TPS
 IDLING_TIME :: TPS_SECOND * 5 // how much time before starts idling
 LAYING_DEAD_TIME :: TPS_SECOND / 3 when !ODIN_DEBUG else 0 // how much time after dying
 INTRO_LENGTH :: TPS_SECOND * 3
-FADE_LENGTH :: TPS_SECOND
+FADE_LENGTH :: TPS_SECOND / 2
+CREDITS_LENGTH :: TPS_SECOND * 3
+END_LENGTH :: TPS_SECOND * 3
 BUFFER_W :: TILES_W * TILE_SIZE
 BUFFER_H :: TILES_H * TILE_SIZE
 DEFAULT_SCALE :: 3
@@ -124,7 +126,7 @@ Level :: struct {
 	current, next: int,
 
 	animation: Animation,
-	carrots: int,
+	carrots, eggs: int,
 	can_end, ended: bool,
 
 	time: time.Duration,
@@ -142,6 +144,7 @@ Scene :: enum {
 	Pause_Menu,
 	Game,
 	End,
+	Credits,
 }
 
 World :: struct {
@@ -151,12 +154,13 @@ World :: struct {
 	scene: Scene,
 	next_scene: Scene,
 
-	intro: Animation,
-	fade: Animation,
+	fade, intro, end, credits: Animation,
 
 	menu_options: Menu_Options,
 	selected_option: int,
-	selected_level: int,
+
+	selected_levels: [Campaign]int,
+	campaign: Campaign,
 
 	level: Level,
 	player: Player,
@@ -576,7 +580,7 @@ draw_fade :: proc(t: ^swin.Texture2D, fade: Animation, frame_delta: f32) {
 
 draw_intro :: proc(t: ^swin.Texture2D, intro: Animation, frame_delta: f32) {
 	slice.fill(t.pixels, swin.Color{})
-	SECTION_LENGTH :: INTRO_LENGTH / 3
+	SECTION_LENGTH :: FADE_LENGTH
 
 	section := intro.timer / SECTION_LENGTH
 	time_in_section := intro.timer % SECTION_LENGTH
@@ -601,6 +605,24 @@ draw_end :: proc(t: ^swin.Texture2D) {
 
 	off := (t.size - END_SPLASH.size) / 2
 	swin.draw_from_texture(t, splashes, off, END_SPLASH)
+}
+
+draw_credits :: proc(t: ^swin.Texture2D) {
+	slice.fill(t.pixels, swin.Color{})
+
+	str := "Original Bobby Carrot made by:"
+	str2 := "Remastered by: @ftphikari"
+
+	str_size := measure_text(general_font, str)
+	str2_size := measure_text(general_font, str2)
+	size_h := str_size[1] + general_font.glyph_size[1] + logo.size[1] + general_font.glyph_size[1] + str2_size[1]
+	off_y := (t.size[1] - size_h) / 2
+
+	draw_text(t, general_font, str, {(t.size[0] - str_size[0]) / 2, off_y})
+	off_y += str_size[1] + general_font.glyph_size[1]
+	swin.draw_from_texture(t, logo, {(t.size[0] - logo.size[0]) / 2, off_y}, {{}, logo.size})
+	off_y += logo.size[1] + general_font.glyph_size[1]
+	draw_text(t, general_font, str2, {(t.size[0] - str2_size[0]) / 2, off_y})
 }
 
 interpolate_tile_position :: #force_inline proc(p: Player, frame_delta: f32) -> [2]f32 {
@@ -634,8 +656,7 @@ interpolate_smooth_position :: #force_inline proc(p: Player, frame_delta: f32) -
 
 /*
 TODO:
-add credits
-add egg campaign
+complete egg campaign
 add scoreboard
 add manual?
 */
@@ -785,7 +806,7 @@ render :: proc(window: ^swin.Window) {
 	selected_option: int
 	player: Player
 
-	carrots, steps: int
+	carrots, eggs, steps: int
 	level_ended: bool
 	level_current: int
 	level_time: time.Duration
@@ -840,6 +861,7 @@ render :: proc(window: ^swin.Window) {
 			selected_option = world.selected_option
 
 			carrots = world.level.carrots
+			eggs = world.level.eggs
 			steps = world.level.steps
 			level_current = world.level.current
 			level_time = world.level.time
@@ -968,21 +990,41 @@ render :: proc(window: ^swin.Window) {
 				{
 					pos: [2]int = {canvas.size[0] - 2, 2}
 
-					carrot_sprite := hud_sprites[.Carrot]
-					pos.x -= carrot_sprite.size[0]
-					swin.draw_from_texture(&canvas, atlas, pos, carrot_sprite)
-					small_array.push_back(&canvas_cache, swin.Rect{pos, carrot_sprite.size})
-					pos.x -= 2
+					if carrots > 0 {
+						sprite := hud_sprites[.Carrot]
+						pos.x -= sprite.size[0]
+						swin.draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, swin.Rect{pos, sprite.size})
+						pos.x -= 2
 
-					tbuf: [8]byte
-					carrots_str := strconv.itoa(tbuf[:], carrots)
-					{
-						size := measure_text(hud_font, carrots_str)
-						pos.x -= size[0]
+						tbuf: [8]byte
+						str := strconv.itoa(tbuf[:], carrots)
+						{
+							size := measure_text(hud_font, str)
+							pos.x -= size[0]
+						}
+						small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, str, {pos.x, pos.y + 3}))
+						pos.y += sprite.size[1] + 2
+						pos.x = canvas.size[0] - 2
 					}
-					small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, carrots_str, {pos.x, pos.y + 3}))
-					pos.y += carrot_sprite.size[1] + 2
-					pos.x = canvas.size[0] - 2
+
+					if eggs > 0 {
+						sprite := hud_sprites[.Egg]
+						pos.x -= sprite.size[0]
+						swin.draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, swin.Rect{pos, sprite.size})
+						pos.x -= 2
+
+						tbuf: [8]byte
+						str := strconv.itoa(tbuf[:], eggs)
+						{
+							size := measure_text(hud_font, str)
+							pos.x -= size[0]
+						}
+						small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, str, {pos.x, pos.y + 3}))
+						pos.y += sprite.size[1] + 2
+						pos.x = canvas.size[0] - 2
+					}
 
 					if player.silver_key {
 						sprite := hud_sprites[.Silver_Key]
@@ -1082,6 +1124,10 @@ render :: proc(window: ^swin.Window) {
 			draw_end(&canvas)
 		}
 
+		if scene == .Credits {
+			draw_credits(&canvas)
+		}
+
 		if fade.state {
 			draw_fade(&canvas, fade, frame_delta)
 			small_array.push_back(&canvas_cache, swin.Rect{{}, canvas.size})
@@ -1151,7 +1197,7 @@ can_move :: proc(pos: [2]int, d: Direction) -> bool {
 	}
 	tile := get_level_tile(pos)
 
-	if tile == .Grass || tile == .Fence {
+	if tile == .Grass || tile == .Fence || tile == .Egg {
 		return false
 	}
 
@@ -1329,10 +1375,18 @@ finish_level :: proc(next: int) {
 
 	world.level.ended = true
 	world.level.next = next
-	if world.level.next > settings.last_unlocked_level {
-		settings.last_unlocked_level = world.level.next
-		if settings.last_unlocked_level >= len(levels) {
-			settings.last_unlocked_level -= 1
+	last_unlocked_level := &settings.last_unlocked_levels[world.campaign]
+	if world.level.next > last_unlocked_level^ {
+		last_unlocked_level^ = world.level.next
+		switch world.campaign {
+		case .Carrot_Harvest:
+			if last_unlocked_level^ >= len(levels) {
+				last_unlocked_level^ -= 1
+			}
+		case .Easter_Eggs:
+			if last_unlocked_level^ >= len(egg_levels) {
+				last_unlocked_level^ -= 1
+			}
 		}
 	}
 	player_animation_start(&world.player.fading)
@@ -1352,6 +1406,9 @@ move_player_to_tile :: proc(d: Direction) {
 	switch {
 	case original_tile == .Trap:
 		set_level_tile(original_pos, .Trap_Activated)
+	case original_tile == .Egg_Spot:
+		set_level_tile(original_pos, .Egg)
+		world.level.eggs -= 1
 	case original_tile in belt_tiles:
 		if current_tile not_in belt_tiles {
 			// if moved from belt unto anything else
@@ -1366,9 +1423,6 @@ move_player_to_tile :: proc(d: Direction) {
 	case current_tile == .Carrot:
 		set_level_tile(world.player, .Carrot_Hole)
 		world.level.carrots -= 1
-		if world.level.carrots == 0 {
-			world.level.can_end = true
-		}
 	case current_tile == .Silver_Key:
 		set_level_tile(world.player, .Ground)
 		world.player.silver_key = true
@@ -1389,10 +1443,6 @@ move_player_to_tile :: proc(d: Direction) {
 		world.player.copper_key = false
 	case current_tile == .Trap_Activated:
 		player_animation_start(&world.player.dying)
-	case current_tile == .End:
-		if world.level.carrots == 0 {
-			finish_level(world.level.current + 1)
-		}
 	case current_tile in belt_tiles:
 		world.player.belt = true
 	case current_tile == .Red_Button:
@@ -1400,29 +1450,39 @@ move_player_to_tile :: proc(d: Direction) {
 	case current_tile == .Yellow_Button:
 		press_yellow_button()
 	}
+
+	if world.level.carrots == 0 && world.level.eggs == 0 {
+		world.level.can_end = true
+	}
+
+	if current_tile == .End && world.level.can_end {
+		finish_level(world.level.current + 1)
+	}
 }
 
 switch_scene :: proc(s: Scene) {
-	world.next_scene = s
-	world.fade.state = true
-	world.fade.timer = 0
-	world.fade.frame = 0
+	if !world.fade.state {
+		world.next_scene = s
+		world.fade.state = true
+		world.fade.timer = 0
+		world.fade.frame = 0
+	}
 }
 
 main_menu_continue :: proc() {
-	world.level.next = settings.last_unlocked_level
+	world.level.next = settings.last_unlocked_levels[world.campaign]
 	switch_scene(.Game)
 }
 
 main_menu_new_game :: proc() {
-	world.selected_level = 0
-	settings.last_unlocked_level = 0
+	world.selected_levels[world.campaign] = 0
+	settings.last_unlocked_levels[world.campaign] = 0
 	world.level.next = 0
 	switch_scene(.Game)
 }
 
 main_menu_select_level :: proc() {
-	world.level.next = world.selected_level
+	world.level.next = world.selected_levels[world.campaign]
 	switch_scene(.Game)
 }
 
@@ -1436,17 +1496,36 @@ main_menu_scoreboard_steps :: proc() {
 
 menu_sound :: proc() {
 	settings.sound = !settings.sound
-	switch world.scene {
+	#partial switch world.scene {
 	case .Pause_Menu:
 		show_pause_menu(clear = false)
 	case .Main_Menu:
 		show_main_menu(clear = false)
-	case .None, .Intro, .Game, .End:
+	}
+}
+
+show_credits :: proc() {
+	if !world.credits.state {
+		if world.scene == .End {
+			world.credits.state = true
+			world.credits.timer = 0
+			world.credits.frame = 0
+		}
+		world.scene = .Credits
+	}
+}
+
+show_end :: proc() {
+	if !world.end.state {
+		world.scene = .End
+		world.end.state = true
+		world.end.timer = 0
+		world.end.frame = 0
 	}
 }
 
 main_menu_credits :: proc() {
-	// TODO
+	switch_scene(.Credits)
 }
 
 main_menu_quit :: proc() {
@@ -1457,9 +1536,16 @@ pause_menu_continue :: proc() {
 	world.scene = .Game
 }
 
-pause_menu_restart :: proc() {
-	switch_scene(.Game)
-	player_animation_start(&world.player.dying)
+restart_level :: proc() {
+	if world.player.fading.state do return
+
+	world.level.next = world.level.current
+	if world.level.ended {
+		load_level()
+	} else {
+		world.scene = .Game
+		player_animation_start(&world.player.dying)
+	}
 }
 
 pause_menu_exit :: proc() {
@@ -1474,12 +1560,12 @@ menu_option_label_printf :: proc(option: ^Menu_Option, format: string, args: ..a
 }
 
 show_main_menu :: proc(clear := true) {
-	if clear do world.selected_option = 0
 	world.scene = .Main_Menu
+	old_len := world.menu_options.len
 	small_array.clear(&world.menu_options)
 
 	total_h: int
-	if settings.last_unlocked_level > 0 {
+	if settings.last_unlocked_levels[world.campaign] > 0 {
 		option: Menu_Option = {function = main_menu_continue}
 		menu_option_label_printf(&option, "Continue")
 		option.x = (BUFFER_W - option.size[0]) / 2
@@ -1503,20 +1589,42 @@ show_main_menu :: proc(clear := true) {
 
 	{
 		option: Menu_Option = {function = main_menu_select_level}
-		menu_option_label_printf(&option, "Select level: {}", world.selected_level + 1)
+		menu_option_label_printf(&option, "Select level: {}", world.selected_levels[world.campaign] + 1)
 		total_w := option.size[0] + (RIGHT_ARROW.size[0] + 2) * 2
 		option.x = (BUFFER_W - total_w) / 2
 		option.y = total_h
 		total_h += option.size[1]
 
 		arrows: [2]bool
-		if settings.last_unlocked_level != 0 {
-			if world.selected_level > 0 {
+		if settings.last_unlocked_levels[world.campaign] != 0 {
+			if world.selected_levels[world.campaign] > 0 {
 				arrows[0] = true
 			}
-			if world.selected_level < settings.last_unlocked_level {
+			if world.selected_levels[world.campaign] < settings.last_unlocked_levels[world.campaign] {
 				arrows[1] = true
 			}
+		}
+		option.arrows = arrows
+
+		small_array.push_back(&world.menu_options, option)
+	}
+
+	total_h += general_font.glyph_size[1]
+
+	{
+		option: Menu_Option
+		menu_option_label_printf(&option, "Campaign: {}", campaign_names[world.campaign] or_else "???")
+		total_w := option.size[0] + (RIGHT_ARROW.size[0] + 2) * 2
+		option.x = (BUFFER_W - total_w) / 2
+		option.y = total_h
+		total_h += option.size[1]
+
+		arrows: [2]bool
+		if int(world.campaign) > 0 {
+			arrows[0] = true
+		}
+		if int(world.campaign) < len(Campaign) - 1 {
+			arrows[1] = true
 		}
 		option.arrows = arrows
 
@@ -1558,8 +1666,6 @@ show_main_menu :: proc(clear := true) {
 
 	total_h += general_font.glyph_size[1]
 
-	// TODO: Campaign switch
-
 	// Manual?
 
 	{
@@ -1587,10 +1693,15 @@ show_main_menu :: proc(clear := true) {
 	for option in &options_slice {
 		option.y += y
 	}
+
+	if clear {
+		world.selected_option = 0
+	} else { // hack if Continue button is not present in both campaigns
+		world.selected_option -= old_len - world.menu_options.len
+	}
 }
 
 show_pause_menu :: proc(clear := true) {
-	if clear do world.selected_option = 0
 	world.scene = .Pause_Menu
 	small_array.clear(&world.menu_options)
 
@@ -1607,7 +1718,7 @@ show_pause_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	{
-		option: Menu_Option = {function = pause_menu_restart}
+		option: Menu_Option = {function = restart_level}
 		menu_option_label_printf(&option, "Restart level")
 		option.x = (BUFFER_W - option.size[0]) / 2
 		option.y = total_h
@@ -1644,6 +1755,8 @@ show_pause_menu :: proc(clear := true) {
 	for option in &options_slice {
 		option.y += y
 	}
+
+	if clear do world.selected_option = 0
 }
 
 load_level :: proc() {
@@ -1658,23 +1771,39 @@ load_level :: proc() {
 	world.player = {}
 	world.level = {}
 
-	if next >= len(levels){
-		world.scene = .End
-		return
-	} else if next < 0 {
+	if next < 0 {
 		show_main_menu()
 		return
 	}
 
+	lvl: []string
+
+	switch world.campaign {
+	case .Carrot_Harvest:
+		if next >= len(levels) {
+			show_end()
+			return
+		}
+		world.level.w = len(levels[next][0])
+		world.level.h = len(levels[next])
+		lvl = levels[next]
+	case .Easter_Eggs:
+		if next >= len(egg_levels) {
+			show_end()
+			return
+		}
+		world.level.w = len(egg_levels[next][0])
+		world.level.h = len(egg_levels[next])
+		lvl = egg_levels[next]
+	}
+
 	world.level.current = next
 	world.level.next = next
-	world.level.w = len(levels[world.level.current][0])
-	world.level.h = len(levels[world.level.current])
 	world.level.tiles = make([]Tiles, world.level.w * world.level.h)
 	world.level.changes = make([]bool, world.level.w * world.level.h)
 	world.level.changed = true
 
-	for row, y in levels[world.level.current] {
+	for row, y in lvl {
 		x: int
 		for char in row {
 			tile := char_to_tile[char] or_else .Ground
@@ -1684,6 +1813,8 @@ load_level :: proc() {
 				world.player.pos = {x, y}
 			case .Carrot:
 				world.level.carrots += 1
+			case .Egg_Spot:
+				world.level.eggs += 1
 			}
 			x += 1
 		}
@@ -1693,13 +1824,14 @@ load_level :: proc() {
 }
 
 common_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) -> (handled: bool) {
-	if world.fade.state do return true
-
 	#partial switch key {
 	case .Enter:
 		handled = true
 		if .Pressed in state {
-			small_array.get_ptr(&world.menu_options, world.selected_option).function()
+			option := small_array.get_ptr(&world.menu_options, world.selected_option)
+			if option.function != nil {
+				option.function()
+			}
 		}
 	case .Down:
 		handled = true
@@ -1738,23 +1870,37 @@ main_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 
 	#partial switch key {
 	case .Right:
-		option := small_array.get_ptr(&world.menu_options, world.selected_option)
-		if option.function == main_menu_select_level {
-			if state & {.Pressed, .Repeated} > {} {
-				world.selected_level += 1
-				if world.selected_level > settings.last_unlocked_level {
-					world.selected_level -= 1
+		if state & {.Pressed, .Repeated} > {} {
+			option := small_array.get_ptr(&world.menu_options, world.selected_option)
+			switch option.function {
+			case main_menu_select_level:
+				world.selected_levels[world.campaign] += 1
+				if world.selected_levels[world.campaign] > settings.last_unlocked_levels[world.campaign] {
+					world.selected_levels[world.campaign] -= 1
+				}
+				show_main_menu(clear = false)
+			case nil: // select campaign
+				world.campaign += Campaign(1)
+				if int(world.campaign) >= len(Campaign) {
+					world.campaign -= Campaign(1)
 				}
 				show_main_menu(clear = false)
 			}
 		}
 	case .Left:
-		option := small_array.get_ptr(&world.menu_options, world.selected_option)
-		if option.function == main_menu_select_level {
-			if state & {.Pressed, .Repeated} > {} {
-				world.selected_level -= 1
-				if world.selected_level < 0 {
-					world.selected_level = 0
+		if state & {.Pressed, .Repeated} > {} {
+			option := small_array.get_ptr(&world.menu_options, world.selected_option)
+			switch option.function {
+			case main_menu_select_level:
+				world.selected_levels[world.campaign] -= 1
+				if world.selected_levels[world.campaign] < 0 {
+					world.selected_levels[world.campaign] = 0
+				}
+				show_main_menu(clear = false)
+			case nil: // select campaign
+				world.campaign -= Campaign(1)
+				if int(world.campaign) < 0 {
+					world.campaign += Campaign(1)
 				}
 				show_main_menu(clear = false)
 			}
@@ -1764,13 +1910,21 @@ main_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 
 intro_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	if .Pressed in state {
-		show_main_menu()
+		world.intro.state = false
+		switch_scene(.Main_Menu)
 	}
 }
 
 end_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	if .Pressed in state {
-		// TODO: switch to credits
+		world.end.state = false
+		switch_scene(.Credits)
+	}
+}
+
+credits_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+	if .Pressed in state {
+		world.credits.state = false
 		switch_scene(.Main_Menu)
 	}
 }
@@ -1785,12 +1939,7 @@ game_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	case .Up:    move_player(.Up)
 	case .R:
 		if .Pressed in state {
-			world.level.next = world.level.current
-			if world.level.ended {
-				load_level()
-			} else {
-				player_animation_start(&world.player.dying)
-			}
+			restart_level()
 		}
 	case .F:
 		if !world.player.fading.state {
@@ -1909,6 +2058,8 @@ update_world :: proc(t: ^thread.Thread) {
 						game_key_handler(key, state)
 					case .End:
 						end_key_handler(key, state)
+					case .Credits:
+						credits_key_handler(key, state)
 					}
 
 					if .Repeated in state do state -= {.Repeated}
@@ -2053,15 +2204,20 @@ update_world :: proc(t: ^thread.Thread) {
 			}
 
 			if world.fade.state {
-				// we are using frame as a counter to only do the action once
+				// we are using fade.frame as a boolean to only do the action once
 				if world.fade.timer >= FADE_LENGTH / 2 && world.fade.frame == 0 {
-					world.scene = world.next_scene
 					world.fade.frame = 1
-					if world.scene == .Main_Menu {
+					switch world.next_scene {
+					case .Main_Menu:
 						show_main_menu()
-					}
-					if world.scene == .Game {
+					case .Game:
 						load_level()
+					case .Credits:
+						show_credits()
+					case .End:
+						show_end()
+					case .None, .Intro, .Pause_Menu: // these should never hit
+						world.scene = world.next_scene
 					}
 				}
 
@@ -2069,6 +2225,22 @@ update_world :: proc(t: ^thread.Thread) {
 					world.fade.state = false
 				}
 				world.fade.timer += 1
+			}
+
+			if world.credits.state {
+				if world.credits.timer >= CREDITS_LENGTH {
+					world.credits.state = false
+					switch_scene(.Main_Menu)
+				}
+				world.credits.timer += 1
+			}
+
+			if world.end.state {
+				if world.end.timer >= END_LENGTH {
+					world.end.state = false
+					switch_scene(.Credits)
+				}
+				world.end.timer += 1
 			}
 
 			global_state.previous_tick = time.tick_now()
