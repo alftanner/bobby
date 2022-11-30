@@ -55,8 +55,8 @@ Window :: struct {
 	using specific: Window_OS_Specific,
 }
 
-create :: proc(window: ^Window, w: int = -1, h: int = -1, name: string = "Window", flags: Window_Flags = {}) -> bool {
-	return _create(window, w, h, name, flags)
+create :: proc(window: ^Window, pos: [2]int = {-1, -1}, size: [2]int = {-1, -1}, name: string = "Window", flags: Window_Flags = {}) -> bool {
+	return _create(window, pos, size, name, flags)
 }
 
 destroy :: #force_inline proc(window: ^Window) { _destroy(window) }

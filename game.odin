@@ -2524,15 +2524,16 @@ _main :: proc(allocator: runtime.Allocator) {
 		json.unmarshal(bytes, &settings)
 	}
 
-	// Open window
-	assert(swin.create(&window, WINDOW_W, WINDOW_H, GAME_TITLE, {.Hide_Cursor}), "Failed to create window")
-	defer swin.destroy(&window)
-
+	pos: [2]int
+	size: [2]int = {WINDOW_W, WINDOW_H}
 	{ // center the window
 		wr := swin.get_working_area()
-		pos := wr.pos + ((wr.size / 2) - (window.size / 2))
-		swin.move(&window, pos)
+		pos = wr.pos + ((wr.size / 2) - (size / 2))
 	}
+
+	// Open window
+	assert(swin.create(&window, pos, size, GAME_TITLE, {.Hide_Cursor}), "Failed to create window")
+	defer swin.destroy(&window)
 
 	//window.clear_color = SKY_BLUE.rgb
 	window.event_handler = event_handler

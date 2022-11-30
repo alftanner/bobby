@@ -12,7 +12,7 @@ Window_OS_Specific :: struct {
 // need to store pointer to the window for _default_window_proc
 @private window_handle: ^Window
 
-_create :: proc "contextless" (window: ^Window, w, h: int, title: string, flags: Window_Flags) -> bool {
+_create :: proc "contextless" (window: ^Window, pos: [2]int, size: [2]int, title: string, flags: Window_Flags) -> bool {
 	if window_handle != nil {
 		return false
 	}
@@ -33,19 +33,27 @@ _create :: proc "contextless" (window: ^Window, w, h: int, title: string, flags:
 	class_style := win32.CS_OWNDC | win32.CS_HREDRAW | win32.CS_VREDRAW | win32.CS_DBLCLKS
 	window_style := win32.WS_VISIBLE | win32.WS_OVERLAPPEDWINDOW &~ win32.WS_THICKFRAME &~ win32.WS_MAXIMIZEBOX
 
-	w, h := i32(w), i32(h)
+	x, y := i32(pos.x), i32(pos.y)
+	w, h := i32(size[0]), i32(size[1])
 
+	if x < 0 do x = win32.CW_USEDEFAULT
+	if y < 0 do y = win32.CW_USEDEFAULT
 	if w < 0 do w = win32.CW_USEDEFAULT
 	if h < 0 do h = win32.CW_USEDEFAULT
 
-	// Windows will make a window with specified size as window size, not as client size, AdjustWindowRect gets the client size needed
-	if w >= 0 || h >= 0 {
-		crect: win32.RECT = {0, 0, w, h}
-		win32.AdjustWindowRect(&crect, window_style, false)
+	crect: win32.RECT
+	if x >= 0 do crect.left = x
+	if y >= 0 do crect.top = y
+	if w >= 0 do crect.right = crect.left + w
+	if h >= 0 do crect.bottom = crect.top + h
 
-		if w >= 0 do w = crect.right - crect.left
-		if h >= 0 do h = crect.bottom - crect.top
-	}
+	// Windows will make a window with specified size as window size, not as client size, AdjustWindowRect gets the client size needed
+	win32.AdjustWindowRect(&crect, window_style, false)
+
+	if x >= 0 do x = crect.left
+	if y >= 0 do y = crect.top
+	if w >= 0 do w = crect.right - crect.left
+	if h >= 0 do h = crect.bottom - crect.top
 
 	window_class: win32.WNDCLASSW = {
 		style = class_style,
@@ -55,14 +63,12 @@ _create :: proc "contextless" (window: ^Window, w, h: int, title: string, flags:
 		hCursor = cursor,
 		hbrBackground = black_brush,
 		lpszClassName = window_title,
-		// TODO(?): hIconSm sets the icon in the task manager
 	}
 	win32.RegisterClassW(&window_class)
 
 	winid := win32.CreateWindowW(
 		lpClassName = window_title, lpWindowName = window_title, dwStyle = window_style, lpParam = nil,
-		X = win32.CW_USEDEFAULT, Y = win32.CW_USEDEFAULT, nWidth = w, nHeight = h,
-		hWndParent = nil, hMenu = nil, hInstance = instance,
+		X = x, Y = y, nWidth = w, nHeight = h, hWndParent = nil, hMenu = nil, hInstance = instance,
 	)
 
 	if winid == nil {
