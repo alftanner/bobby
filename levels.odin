@@ -5,11 +5,6 @@ Campaign :: enum {
 	Easter_Eggs,
 }
 
-campaign_names: map[Campaign]string = {
-	.Carrot_Harvest = "Carrot Harvest",
-	.Easter_Eggs = "Easter Eggs",
-}
-
 char_to_tile: map[rune]Tiles = {
 	'.' = .Grass,
 	' ' = .Ground,
@@ -43,7 +38,7 @@ char_to_tile: map[rune]Tiles = {
 	'E' = .Egg,
 }
 
-levels := [?][]string {
+carrot_levels := [?][]string {
 	{
 		".........",
 		"...   ...",
@@ -582,5 +577,10 @@ egg_levels := [?][]string {
 		".     -⌜⌝-    .",
 		"...............",
 	},
+}
+
+all_levels: [Campaign][][]string = {
+	.Carrot_Harvest = carrot_levels[:],
+	.Easter_Eggs = egg_levels[:],
 }
 // ⌝⌞⌜⌟
