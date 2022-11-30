@@ -865,7 +865,6 @@ render :: proc(window: ^swin.Window) {
 	selected_levels: [Campaign]int
 	sound: bool
 	language: Language
-	lang_strings: [Language_Strings]string
 	player: Player
 
 	carrots, eggs: int
