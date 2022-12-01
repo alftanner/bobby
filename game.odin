@@ -45,7 +45,7 @@ Settings :: struct #packed {
 	language: Language,
 }
 default_settings: Settings : {
-	fps = 60,
+	fps = 30,
 	vsync = true,
 	show_stats = true when ODIN_DEBUG else false,
 	sound = true,
