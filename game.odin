@@ -558,7 +558,9 @@ draw_stats :: proc(canvas: ^swin.Texture2D) -> swin.Rect {
 	return draw_text(canvas, general_font, text, pos)
 }
 
-draw_fade :: proc(t: ^swin.Texture2D, fade: Animation, frame_delta: f32) {
+get_fade_alpha :: proc(fade: Animation, frame_delta: f32) -> u8 {
+	if !fade.state do return 0
+
 	SECTION_LENGTH :: FADE_LENGTH / 2
 
 	section := fade.timer / SECTION_LENGTH
@@ -576,11 +578,10 @@ draw_fade :: proc(t: ^swin.Texture2D, fade: Animation, frame_delta: f32) {
 		alpha = 0
 	}
 
-	swin.draw_rect(t, {{}, t.size}, {0, 0, 0, alpha})
+	return alpha
 }
 
-draw_intro :: proc(t: ^swin.Texture2D, intro: Animation, frame_delta: f32) {
-	slice.fill(t.pixels, swin.Color{})
+get_intro_alpha :: proc(intro: Animation, frame_delta: f32) -> u8 {
 	SECTION_LENGTH :: FADE_LENGTH
 
 	section := intro.timer / SECTION_LENGTH
@@ -596,20 +597,11 @@ draw_intro :: proc(t: ^swin.Texture2D, intro: Animation, frame_delta: f32) {
 		alpha = 0
 	}
 
-	off := (t.size - INTRO_SPLASH.size) / 2
-	swin.draw_from_texture(t, splashes, off, INTRO_SPLASH)
-	swin.draw_rect(t, {off, INTRO_SPLASH.size}, {0, 0, 0, alpha})
-}
-
-draw_end :: proc(t: ^swin.Texture2D) {
-	slice.fill(t.pixels, swin.Color{})
-
-	off := (t.size - END_SPLASH.size) / 2
-	swin.draw_from_texture(t, splashes, off, END_SPLASH)
+	return alpha
 }
 
 draw_credits :: proc(t: ^swin.Texture2D, language: Language) {
-	slice.fill(t.pixels, swin.Color{})
+	slice.fill(t.pixels, swin.BLACK)
 
 	str := language_strings[language][.Credits_Original]
 	str2 := language_strings[language][.Credits_Remastered]
@@ -628,7 +620,7 @@ draw_credits :: proc(t: ^swin.Texture2D, language: Language) {
 
 interpolate_tile_position :: #force_inline proc(p: Player, frame_delta: f32) -> [2]f32 {
 	if p.walking.state {
-		ANIM_TIME :: f32(WALKING_ANIM_FRAME_LEN * WALKING_ANIM_LEN)
+		ANIM_TIME :: f32(WALKING_ANIM_FRAME_LEN * WALKING_ANIM_LEN) - 1
 		delta := (f32(p.walking.timer) + frame_delta) / ANIM_TIME
 		// even if frame was too long after the tick, we don't want to overextend the position any further than it can normally be
 		delta = min(delta, 1)
@@ -655,12 +647,39 @@ interpolate_smooth_position :: #force_inline proc(p: Player, frame_delta: f32) -
 }
 */
 
-/*
-TODO:
-complete egg campaign
-add manual?
-implement generalized cached rendering system?
-*/
+get_end_sprite :: proc(frame: uint) -> Sprite {
+	sprite := sprites[.End]
+	if world.level.can_end {
+		sprite = end_animation[frame]
+	}
+	return sprite
+}
+
+get_belt_sprite :: proc(frame: uint, t: Tiles) -> Sprite {
+	sprite := belt_animation[frame]
+	#partial switch t {
+	case .Belt_Right:
+		sprite.x += 64
+	case .Belt_Up:
+		sprite.x += 128
+	case .Belt_Down:
+		sprite.y += 16
+	}
+	return sprite
+}
+
+get_walking_sprite :: proc(frame: uint) -> Sprite_Offset {
+	sprite := walking_animation[frame]
+	#partial switch world.player.direction {
+	case .Left:
+		sprite.y += 25
+	case .Up:
+		sprite.y += 50
+	case .Right:
+		sprite.y += 75
+	}
+	return sprite
+}
 
 get_sprite_from_tile :: proc(pos: [2]int, animation: Animation) -> Sprite {
 	tile := get_level_tile(pos)
@@ -719,7 +738,8 @@ collect_level_updates :: proc(q: ^Tile_Queue, animation: Animation) {
 		pos: [2]int = {idx%world.level.w, idx/world.level.w}
 		tile := get_level_tile(pos)
 
-		if !changed && tile not_in belt_tiles && !(world.level.can_end && tile == .End) {
+		// always update belt tiles, and update end tile if the level can end
+		if !changed && !(tile in belt_tiles) && !(world.level.can_end && tile == .End) {
 			continue
 		}
 
@@ -877,13 +897,15 @@ render :: proc(window: ^swin.Window) {
 	tick_time: f32
 	diff, offset: [2]f32
 
-	canvas, menu_texture, level_texture: swin.Texture2D
-	tiles_updated: Tile_Queue
-	canvas_cache, canvas_long_cache: Region_Cache
+	canvas, scene_texture: swin.Texture2D
+	canvas_cache, canvas_cache_slow: Region_Cache
+
 	backgrounds: [Campaign]swin.Texture2D
+	level_texture: swin.Texture2D
+	tiles_updated: Tile_Queue
 
 	canvas = swin.texture_make(BUFFER_W, BUFFER_H)
-	menu_texture = swin.texture_make(BUFFER_W, BUFFER_H)
+	scene_texture = swin.texture_make(BUFFER_W, BUFFER_H)
 	for bg, c in &backgrounds {
 		bg = swin.texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
 		sprite := sprites[.Grass if c == .Carrot_Harvest else .Ground]
@@ -893,12 +915,14 @@ render :: proc(window: ^swin.Window) {
 		}
 	}
 
+	// TODO: try draw command approach
 	frame: int
+	intro_alpha: u8
 	for {
 		start_tick := time.tick_now()
 
-		// TODO: try draw command approach
-		world_redraw, menu_redraw, menu_update_draw: bool
+		canvas_redraw, scene_redraw, cache_slow_redraw: bool
+		old_fade_state := fade.state
 		if sync.atomic_load(&world.updated) {
 			sync.guard(&world.lock)
 			defer sync.atomic_store(&world.updated, false)
@@ -907,40 +931,33 @@ render :: proc(window: ^swin.Window) {
 				world.level.changed = false
 				small_array.clear(&tiles_updated)
 				draw_level(&level_texture, world.level.animation)
-				world_redraw = true
+				scene_redraw = true
+				diff = {f32(TILES_W - world.level.w), f32(TILES_H - world.level.h)}
 			}
 			collect_level_updates(&tiles_updated, world.level.animation)
-			diff = {f32(TILES_W - world.level.w), f32(TILES_H - world.level.h)}
 
 			player = world.player
 			intro = world.intro
 
 			if scene != world.scene {
-				if world.scene == .Game {
-					world_redraw = true
-				} else if world.scene == .Main_Menu || world.scene == .Pause_Menu || world.scene == .Scoreboard {
-					menu_redraw = true
-				}
+				scene_redraw = true
 			}
 			scene = world.scene
 
-			if campaign != settings.campaign {
-				menu_redraw = true
-			}
-			campaign = settings.campaign
+			fade = world.fade
+			menu_options = world.menu_options
 
 			scoreboard = world.scoreboard
 			if scoreboard_page != world.scoreboard_page || selected_option != world.selected_option ||
-			selected_levels != settings.selected_levels || sound != settings.sound || language != settings.language ||
-			fade.state || world.fade.state {
-				menu_update_draw = true
+			selected_levels != settings.selected_levels || sound != settings.sound ||
+			campaign != settings.campaign || language != settings.language {
+				cache_slow_redraw = true
 			}
-			fade = world.fade
 			scoreboard_page = world.scoreboard_page
-			menu_options = world.menu_options
 			selected_option = world.selected_option
 			selected_levels = settings.selected_levels
 			sound = settings.sound
+			campaign = settings.campaign
 			language = settings.language
 
 			carrots = world.level.carrots
@@ -953,35 +970,27 @@ render :: proc(window: ^swin.Window) {
 			tick_time = f32(time.duration_milliseconds(sync.atomic_load(&global_state.tick_time)))
 		}
 
-		if fade.state {
-			menu_update_draw = true
+		if old_fade_state || fade.state {
+			cache_slow_redraw = true
 		}
 
+		// for smooth drawing
 		frame_delta := f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now()))) / tick_time
-
+		player_pos := interpolate_tile_position(player, frame_delta)
+		// for testing
+		// TODO: remove it
 		frame += 1
 
-		// flush long caches
-		if menu_redraw || menu_update_draw {
-			#partial switch scene {
-			case .Main_Menu, .Pause_Menu, .Scoreboard:
-				for region in small_array.pop_back_safe(&canvas_long_cache) {
-					small_array.push_back(&canvas_cache, region)
-				}
-			}
-		}
-
-		// If switching to pause menu - redraw the world for an extra frame.
-		// NOTE: This will cause a jitter if the player is moving too fast, but it's not that bad.
-		if scene == .Game || (scene == .Pause_Menu && menu_redraw) {
-			player_pos := interpolate_tile_position(player, frame_delta)
-			draw_background: bool
+		draw_world_background: bool
+		bg_rect, bg_region, lvl_rect, lvl_region: swin.Rect
+		#partial switch scene {
+		case .Game: // calculate offset
 			old_offset := offset
 			offset = {}
 
 			if diff.x > 0 {
 				offset.x = diff.x / 2
-				draw_background = true
+				draw_world_background = true
 			} else {
 				off := (f32(TILES_W) / 2) - (f32(player_pos.x) + 0.5)
 				if diff.x > off {
@@ -993,7 +1002,7 @@ render :: proc(window: ^swin.Window) {
 
 			if diff.y > 0 {
 				offset.y = diff.y / 2
-				draw_background = true
+				draw_world_background = true
 			} else {
 				off := (f32(TILES_H) / 2) - (f32(player_pos.y) + 0.5)
 				if diff.y > off {
@@ -1003,54 +1012,110 @@ render :: proc(window: ^swin.Window) {
 				}
 			}
 
+			bg_rect.pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
+			bg_rect.pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
+			bg_rect.size = backgrounds[.Carrot_Harvest].size - bg_rect.pos
+			bg_region.size = bg_rect.size
+
+			lvl_rect.size = level_texture.size
+			lvl_region.pos.x = int(offset.x * TILE_SIZE)
+			lvl_region.pos.y = int(offset.y * TILE_SIZE)
+			lvl_region.size = lvl_rect.size
+
+			// redraw scene if camera moved
 			if old_offset != offset {
-				world_redraw = true
+				scene_redraw = true
 			}
 
-			bg_offset: [2]int
-			bg_offset.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
-			bg_offset.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
-			bg_rect: swin.Rect = {bg_offset, {backgrounds[.Carrot_Harvest].size[0] - bg_offset.x, backgrounds[.Carrot_Harvest].size[1] - bg_offset.y}}
-			bg_region: swin.Rect = {{}, bg_rect.size}
-
-			lvl_rect: swin.Rect = {{}, level_texture.size}
-			lvl_region: swin.Rect = {{int(offset.x * TILE_SIZE), int(offset.y * TILE_SIZE)}, lvl_rect.size}
-
-			{ // draw updated tiles to texture
+			{ // draw updated tiles to level texture
 				for tile in small_array.slice(&tiles_updated) {
 					swin.draw_from_texture(&level_texture, atlas, tile.offset * TILE_SIZE, tile)
 				}
 			}
 
-			if world_redraw {
-				small_array.clear(&canvas_cache)
-				small_array.clear(&tiles_updated)
-				if draw_background {
-					swin.draw_from_texture(&canvas, backgrounds[.Carrot_Harvest], bg_region.pos, bg_rect)
-				}
-				swin.draw_from_texture(&canvas, level_texture, lvl_region.pos, lvl_rect)
-			} else { // cached rendering
-				for cache_region in small_array.pop_back_safe(&canvas_cache) {
-					region: swin.Rect
-					region = rect_intersection(bg_region, cache_region)
-					if region.size[0] > 0 && region.size[1] > 0 {
-						swin.draw_from_texture(&canvas, backgrounds[.Carrot_Harvest], region.pos, {region.pos + bg_rect.pos, region.size})
-					}
-					region = rect_intersection(lvl_region, cache_region)
-					if region.size[0] > 0 && region.size[1] > 0 {
-						swin.draw_from_texture(&canvas, level_texture, region.pos, {region.pos - lvl_region.pos, region.size})
-					}
-				}
-
-				// draw updated tiles to canvas
+			if !scene_redraw {
+				// draw updated tiles to scene texture
 				for tile in small_array.pop_back_safe(&tiles_updated) {
 					pos := tile.offset * TILE_SIZE
-					swin.draw_from_texture(&canvas, level_texture, pos + lvl_region.pos, {pos, {TILE_SIZE, TILE_SIZE}})
+					region: swin.Rect
+					region.pos = pos + lvl_region.pos
+					region.size = {TILE_SIZE, TILE_SIZE}
+					swin.draw_from_texture(&scene_texture, level_texture, region.pos, {pos, region.size})
+					small_array.push_back(&canvas_cache, region)
 				}
+			} else {
+				small_array.clear(&tiles_updated)
+			}
+		case .Intro: // do not redraw the intro after alpha became 0
+			old_intro_alpha := intro_alpha
+			intro_alpha = get_intro_alpha(intro, frame_delta)
+			if old_intro_alpha != 0 || intro_alpha != 0 {
+				scene_redraw = true
+			}
+		}
+
+		if scene_redraw {
+			switch scene {
+			case .Game:
+				if draw_world_background {
+					swin.draw_from_texture(&scene_texture, backgrounds[.Carrot_Harvest], bg_region.pos, bg_rect)
+				}
+				swin.draw_from_texture(&scene_texture, level_texture, lvl_region.pos, lvl_rect)
+			case .Pause_Menu, .Main_Menu, .Scoreboard:
+				texture := backgrounds[campaign]
+				if scene == .Pause_Menu {
+					texture = canvas
+				}
+				swin.draw_from_texture(&scene_texture, texture, {}, {{}, scene_texture.size})
+				swin.draw_rect(&scene_texture, {{}, scene_texture.size}, {0, 0, 0, 0xaa})
+			case .Intro:
+				slice.fill(scene_texture.pixels, swin.BLACK)
+
+				off := (scene_texture.size - INTRO_SPLASH.size) / 2
+				swin.draw_from_texture(&scene_texture, splashes, off, INTRO_SPLASH)
+				swin.draw_rect(&scene_texture, {off, INTRO_SPLASH.size}, {0, 0, 0, intro_alpha})
+			case .End:
+				slice.fill(scene_texture.pixels, swin.BLACK)
+
+				off := (scene_texture.size - END_SPLASH.size) / 2
+				swin.draw_from_texture(&scene_texture, splashes, off, END_SPLASH)
+			case .Credits:
+				draw_credits(&scene_texture, language)
+			case .None:
+				slice.fill(scene_texture.pixels, swin.color(SKY_BLUE))
 			}
 
+			canvas_redraw = true
+		}
+
+		if !canvas_redraw { // cached rendering
+			for cache_region in small_array.pop_back_safe(&canvas_cache) {
+				swin.draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
+			}
+		} else {
+			small_array.clear(&canvas_cache)
+			small_array.clear(&canvas_cache_slow)
+			swin.draw_from_texture(&canvas, scene_texture, {}, {{}, scene_texture.size})
+		}
+
+		if canvas_redraw || cache_slow_redraw {
+			for cache_region in small_array.pop_back_safe(&canvas_cache_slow) {
+				swin.draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
+			}
+
+			// slow cached drawing
+			#partial switch scene {
+			case .Main_Menu, .Pause_Menu:
+				draw_menu(&canvas, &canvas_cache_slow, small_array.slice(&menu_options), selected_option)
+			case .Scoreboard:
+				draw_scoreboard(&canvas, &canvas_cache_slow, small_array.slice(&scoreboard), scoreboard_page)
+			}
+		}
+
+		// do scene specific drawing that gets into fast cache, such as player/HUD/etc
+		if scene == .Game {
+			// draw player
 			if !level_ended || (level_ended && player.fading.state) {
-				// draw player
 				pos := (player_pos + offset) * TILE_SIZE
 				px := int(pos.x) + player.sprite.offset.x
 				py := int(pos.y) + player.sprite.offset.y
@@ -1195,47 +1260,11 @@ render :: proc(window: ^swin.Window) {
 			}
 		}
 
-		if menu_redraw {
+		fade_alpha := get_fade_alpha(fade, frame_delta)
+		if fade_alpha != 0 {
+			swin.draw_rect(&canvas, {{}, canvas.size}, {0, 0, 0, fade_alpha})
+			small_array.clear(&canvas_cache_slow)
 			small_array.clear(&canvas_cache)
-
-			texture := backgrounds[campaign]
-			if scene == .Pause_Menu {
-				texture = canvas
-			}
-			swin.draw_from_texture(&menu_texture, texture, {}, {{}, menu_texture.size})
-			swin.draw_rect(&menu_texture, {{}, menu_texture.size}, {0, 0, 0, 0xaa})
-
-			swin.draw_from_texture(&canvas, menu_texture, {}, {{}, menu_texture.size})
-		}
-
-		// redraw cached regions in menu
-		if scene == .Pause_Menu || scene == .Main_Menu || scene == .Scoreboard {
-			for cache_region in small_array.pop_back_safe(&canvas_cache) {
-				swin.draw_from_texture(&canvas, menu_texture, cache_region.pos, cache_region)
-			}
-		}
-
-		if menu_redraw || menu_update_draw {
-			#partial switch scene {
-			case .Main_Menu, .Pause_Menu:
-				draw_menu(&canvas, &canvas_long_cache, small_array.slice(&menu_options), selected_option)
-			case .Scoreboard:
-				draw_scoreboard(&canvas, &canvas_long_cache, small_array.slice(&scoreboard), scoreboard_page)
-			}
-		}
-
-		// TODO: cache rendering for these? Too complicated?
-		#partial switch scene {
-		case .Intro:
-			draw_intro(&canvas, intro, frame_delta)
-		case .End:
-			draw_end(&canvas)
-		case .Credits:
-			draw_credits(&canvas, language)
-		}
-
-		if fade.state {
-			draw_fade(&canvas, fade, frame_delta)
 			small_array.push_back(&canvas_cache, swin.Rect{{}, canvas.size})
 		}
 
@@ -1244,7 +1273,6 @@ render :: proc(window: ^swin.Window) {
 		}
 
 		sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
-
 		if settings.vsync {
 			swin.wait_vblank()
 		} else {
@@ -1689,6 +1717,11 @@ label_printf :: proc(label: ^Text_Label, format: string, args: ..any) {
 	text := fmt.bprintf(label.text_buf[:], format, ..args)
 	label.text_len = len(text)
 	label.size = measure_text(general_font, text)
+}
+
+show_intro :: proc() {
+	world.scene = .Intro
+	world.intro.state = true
 }
 
 show_scoreboard :: proc() {
@@ -2141,7 +2174,9 @@ game_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 		}
 	case .Escape:
 		if .Pressed in state {
-			show_pause_menu()
+			if !world.player.fading.state {
+				show_pause_menu()
+			}
 		}
 	case .Enter:
 		if .Pressed in state {
@@ -2152,46 +2187,11 @@ game_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	}
 }
 
-get_end_sprite :: proc(frame: uint) -> Sprite {
-	sprite := sprites[.End]
-	if world.level.can_end {
-		sprite = end_animation[frame]
-	}
-	return sprite
-}
-
-get_belt_sprite :: proc(frame: uint, t: Tiles) -> Sprite {
-	sprite := belt_animation[frame]
-	#partial switch t {
-	case .Belt_Right:
-		sprite.x += 64
-	case .Belt_Up:
-		sprite.x += 128
-	case .Belt_Down:
-		sprite.y += 16
-	}
-	return sprite
-}
-
-get_walking_sprite :: proc(frame: uint) -> Sprite_Offset {
-	sprite := walking_animation[frame]
-	#partial switch world.player.direction {
-	case .Left:
-		sprite.y += 25
-	case .Up:
-		sprite.y += 50
-	case .Right:
-		sprite.y += 75
-	}
-	return sprite
-}
-
 update_world :: proc(t: ^thread.Thread) {
 	when ODIN_DEBUG {
 		show_main_menu()
 	} else {
-		world.scene = .Intro
-		world.intro.state = true
+		show_intro()
 	}
 
 	for {
@@ -2331,27 +2331,24 @@ update_world :: proc(t: ^thread.Thread) {
 			}
 
 			if world.fade.state {
-				old_section := world.fade.timer / (FADE_LENGTH / 2)
 				if world.fade.timer >= FADE_LENGTH {
 					world.fade.state = false
 				}
-				world.fade.timer += 1
 
+				old_section := world.fade.timer / (FADE_LENGTH / 2)
+				world.fade.timer += 1
 				section := world.fade.timer / (FADE_LENGTH / 2)
+
 				if section != old_section && old_section == 0 {
 					switch world.next_scene {
-					case .Main_Menu:
-						show_main_menu()
-					case .Game:
-						load_level()
-					case .Credits:
-						show_credits()
-					case .End:
-						show_end()
-					case .Scoreboard:
-						show_scoreboard()
-					case .None, .Intro, .Pause_Menu: // these should never hit
-						world.scene = world.next_scene
+					case .Game: load_level()
+					case .Main_Menu: show_main_menu()
+					case .Credits: show_credits()
+					case .Pause_Menu: show_pause_menu()
+					case .End: show_end()
+					case .Scoreboard: show_scoreboard()
+					case .Intro: show_intro()
+					case .None: world.scene = world.next_scene
 					}
 				}
 			}
@@ -2383,14 +2380,14 @@ update_world :: proc(t: ^thread.Thread) {
 	}
 }
 
-load_texture :: proc(data: []byte, $layout: typeid) -> (t: swin.Texture2D) {
+load_texture :: proc(data: []byte) -> (t: swin.Texture2D) {
 	img, err := image.load(data)
 	assert(err == nil, fmt.tprint(err))
 	defer image.destroy(img)
 
 	t = swin.texture_make(img.width, img.height)
 
-	pixels := mem.slice_data_cast([]layout, bytes.buffer_to_bytes(&img.pixels))
+	pixels := mem.slice_data_cast([]image.RGBA_Pixel, bytes.buffer_to_bytes(&img.pixels))
 	for p, i in pixels {
 		t.pixels[i] = swin.color(p)
 	}
@@ -2398,7 +2395,7 @@ load_texture :: proc(data: []byte, $layout: typeid) -> (t: swin.Texture2D) {
 }
 
 load_resources :: proc() {
-	general_font.texture = load_texture(#load("res/font.png"), image.RGBA_Pixel)
+	general_font.texture = load_texture(#load("res/font.png"))
 	general_font.glyph_size = {5, 7}
 	general_font.table = make(map[rune][2]int)
 	for ch in ` 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ?'".,:;~!@#$^&_|\/%*+-=<>()[]{}` {
@@ -2436,7 +2433,7 @@ load_resources :: proc() {
 		general_font.table['Т'] = general_font.table['T']
 	}
 
-	atlas = load_texture(#load("res/atlas.png"), image.RGBA_Pixel)
+	atlas = load_texture(#load("res/atlas.png"))
 
 	hud_font.texture = atlas
 	hud_font.glyph_size = {5, 8}
@@ -2449,15 +2446,15 @@ load_resources :: proc() {
 		hud_font.table[ch] = {gx, gy}
 	}
 
-	MAX_X :: 12
+	ATLAS_TILES_W :: 12
 	for s in Sprites {
 		idx := int(s)
-		pos: [2]int = {idx%MAX_X, idx/MAX_X}
+		pos: [2]int = {idx%ATLAS_TILES_W, idx/ATLAS_TILES_W}
 		sprites[s] = {pos * TILE_SIZE, {TILE_SIZE, TILE_SIZE}}
 	}
 
-	splashes = load_texture(#load("res/splashes.png"), image.RGBA_Pixel)
-	logo = load_texture(#load("res/logo.png"), image.RGBA_Pixel)
+	splashes = load_texture(#load("res/splashes.png"))
+	logo = load_texture(#load("res/logo.png"))
 }
 
 _main :: proc(allocator: runtime.Allocator) {
@@ -2575,3 +2572,10 @@ _main :: proc(allocator: runtime.Allocator) {
 		assert(ok, fmt.tprint("Unable to save the game"))
 	}
 }
+
+/*
+TODO:
+complete egg campaign
+add manual?
+sound
+*/

@@ -1,6 +1,5 @@
 package simple_window
 
-import "core:runtime"
 import "core:image"
 
 /*
