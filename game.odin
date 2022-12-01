@@ -1159,7 +1159,7 @@ render :: proc(window: ^swin.Window) {
 				}
 				total_h += time_h + general_font.glyph_size[1]
 
-				steps_str := fmt.bprintf(tbuf[32:48], "{}: {}", language_strings[settings.language][.Steps], level_score.steps)
+				steps_str := fmt.bprintf(tbuf[32:], "{}: {}", language_strings[settings.language][.Steps], level_score.steps)
 				steps_x, steps_h: int
 				{
 					size := measure_text(general_font, steps_str)
