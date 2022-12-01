@@ -1043,8 +1043,7 @@ render :: proc(window: ^swin.Window) {
 				}
 
 				// draw updated tiles to canvas
-				for tiles_updated.len > 0 {
-					tile := small_array.pop_back(&tiles_updated)
+				for tile in small_array.pop_back_safe(&tiles_updated) {
 					pos := tile.offset * TILE_SIZE
 					swin.draw_from_texture(&canvas, level_texture, pos + lvl_region.pos, {pos, {TILE_SIZE, TILE_SIZE}})
 				}
