@@ -915,7 +915,6 @@ render :: proc(window: ^swin.Window) {
 		}
 	}
 
-	// TODO: try draw command approach
 	frame: int
 	intro_alpha: u8
 	for {
