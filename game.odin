@@ -175,6 +175,7 @@ World :: struct {
 
 	menu_options: Menu_Options,
 	selected_option: int,
+	keep_selected_option: bool,
 
 	scoreboard: Scoreboard,
 	scoreboard_page: int,
@@ -896,6 +897,7 @@ render :: proc(window: ^swin.Window) {
 	for {
 		start_tick := time.tick_now()
 
+		// TODO: try draw command approach
 		world_redraw, menu_redraw, menu_update_draw: bool
 		if sync.atomic_load(&world.updated) {
 			sync.guard(&world.lock)
@@ -1591,9 +1593,11 @@ menu_sound :: proc() {
 	settings.sound = !settings.sound
 	#partial switch world.scene {
 	case .Pause_Menu:
-		show_pause_menu(clear = false)
+		world.keep_selected_option = true
+		show_pause_menu()
 	case .Main_Menu:
-		show_main_menu(clear = false)
+		world.keep_selected_option = true
+		show_main_menu()
 	}
 }
 
@@ -1631,32 +1635,38 @@ pause_menu_continue :: proc() {
 
 select_level_prev :: proc() {
 	settings.selected_levels[settings.campaign] -= 1
-	show_main_menu(clear = false)
+	world.keep_selected_option = true
+	show_main_menu()
 }
 
 select_level_next :: proc() {
 	settings.selected_levels[settings.campaign] += 1
-	show_main_menu(clear = false)
+	world.keep_selected_option = true
+	show_main_menu()
 }
 
 select_campaign_prev :: proc() {
 	settings.campaign -= Campaign(1)
-	show_main_menu(clear = false)
+	world.keep_selected_option = true
+	show_main_menu()
 }
 
 select_campaign_next :: proc() {
 	settings.campaign += Campaign(1)
-	show_main_menu(clear = false)
+	world.keep_selected_option = true
+	show_main_menu()
 }
 
 select_language_prev :: proc() {
 	settings.language -= Language(1)
-	show_main_menu(clear = false)
+	world.keep_selected_option = true
+	show_main_menu()
 }
 
 select_language_next :: proc() {
 	settings.language += Language(1)
-	show_main_menu(clear = false)
+	world.keep_selected_option = true
+	show_main_menu()
 }
 
 restart_level :: proc() {
@@ -1710,7 +1720,7 @@ show_scoreboard :: proc() {
 	}
 }
 
-show_main_menu :: proc(clear := true) {
+show_main_menu :: proc() {
 	world.scene = .Main_Menu
 	old_len := world.menu_options.len
 	small_array.clear(&world.menu_options)
@@ -1880,11 +1890,12 @@ show_main_menu :: proc(clear := true) {
 		option.y += y
 	}
 
-	if clear {
+	if !world.keep_selected_option {
 		world.selected_option = 0
 	} else { // hack if Continue button is not present in both campaigns
 		world.selected_option -= old_len - world.menu_options.len
 	}
+	world.keep_selected_option = false
 }
 
 show_pause_menu :: proc(clear := true) {
@@ -1942,7 +1953,8 @@ show_pause_menu :: proc(clear := true) {
 		option.y += y
 	}
 
-	if clear do world.selected_option = 0
+	if !world.keep_selected_option do world.selected_option = 0
+	world.keep_selected_option = false
 }
 
 load_level :: proc() {
@@ -2080,6 +2092,7 @@ end_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 credits_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	if .Pressed in state {
 		world.credits.state = false
+		world.keep_selected_option = true
 		switch_scene(.Main_Menu)
 	}
 }
@@ -2100,7 +2113,8 @@ scoreboard_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 				world.scoreboard_page -= 1
 			}
 		case .Escape:
-			show_main_menu(clear = false)
+			world.keep_selected_option = true
+			show_main_menu()
 		}
 	}
 }
@@ -2370,59 +2384,6 @@ update_world :: proc(t: ^thread.Thread) {
 	}
 }
 
-event_handler :: proc(window: ^swin.Window, event: swin.Event) {
-	switch ev in event {
-	case swin.Close_Event:
-	case swin.Focus_Event:
-		if !ev.focused {
-			sync.guard(&global_state.keyboard.lock)
-			for state in &global_state.keyboard.keys {
-				// release all pressed keys
-				if .Held in state {
-					state = {.Released}
-				}
-			}
-		}
-	case swin.Draw_Event:
-	case swin.Resize_Event:
-		save_to_i64(&global_state.client_size, {i32(window.client.size[0]), i32(window.client.size[1])})
-	case swin.Move_Event:
-	case swin.Character_Event:
-	case swin.Keyboard_Event:
-		{
-			sync.guard(&global_state.keyboard.lock)
-			state := global_state.keyboard.keys[ev.key]
-			switch ev.state {
-			case .Released: state += {.Released}
-			case .Repeated: state += {.Repeated}
-			case .Pressed: state += {.Pressed, .Held}
-			}
-			global_state.keyboard.keys[ev.key] = state
-		}
-
-		switch ev.state {
-		case .Repeated, .Released:
-		case .Pressed:
-			// TODO: remove these before release
-			#partial switch ev.key {
-			case .V: settings.vsync = !settings.vsync
-			case .I: settings.show_stats = !settings.show_stats
-			case .B: settings = default_settings
-			case .Num0: settings.fps = 0
-			case .Num1: settings.fps = 10
-			case .Num2: settings.fps = 200
-			case .Num3: settings.fps = 30
-			case .Num4: settings.fps = 144
-			case .Num6: settings.fps = 60
-			case .Num9: settings.fps = 1000
-			}
-		}
-	case swin.Mouse_Button_Event:
-	case swin.Mouse_Move_Event:
-	case swin.Mouse_Wheel_Event:
-	}
-}
-
 load_texture :: proc(data: []byte, $layout: typeid) -> (t: swin.Texture2D) {
 	img, err := image.load(data)
 	assert(err == nil, fmt.tprint(err))
@@ -2536,7 +2497,6 @@ _main :: proc(allocator: runtime.Allocator) {
 	defer swin.destroy(&window)
 
 	//window.clear_color = SKY_BLUE.rgb
-	window.event_handler = event_handler
 	swin.set_resizable(&window, true)
 	swin.set_min_size(&window, {BUFFER_W, BUFFER_H})
 
@@ -2555,7 +2515,56 @@ _main :: proc(allocator: runtime.Allocator) {
 	}
 
 	for !window.must_close {
-		swin.next_event(&window)
+		switch ev in swin.next_event(&window) {
+		case swin.Close_Event:
+		case swin.Focus_Event:
+			if !ev.focused {
+				sync.guard(&global_state.keyboard.lock)
+				for state in &global_state.keyboard.keys {
+					// release all pressed keys
+					if .Held in state {
+						state = {.Released}
+					}
+				}
+			}
+		case swin.Draw_Event:
+		case swin.Resize_Event:
+			save_to_i64(&global_state.client_size, {i32(window.client.size[0]), i32(window.client.size[1])})
+		case swin.Move_Event:
+		case swin.Character_Event:
+		case swin.Keyboard_Event:
+			{
+				sync.guard(&global_state.keyboard.lock)
+				state := global_state.keyboard.keys[ev.key]
+				switch ev.state {
+				case .Released: state += {.Released}
+				case .Repeated: state += {.Repeated}
+				case .Pressed: state += {.Pressed, .Held}
+				}
+				global_state.keyboard.keys[ev.key] = state
+			}
+
+			switch ev.state {
+			case .Repeated, .Released:
+			case .Pressed:
+				// TODO: remove these before release
+				#partial switch ev.key {
+				case .V: settings.vsync = !settings.vsync
+				case .I: settings.show_stats = !settings.show_stats
+				case .B: settings = default_settings
+				case .Num0: settings.fps = 0
+				case .Num1: settings.fps = 10
+				case .Num2: settings.fps = 200
+				case .Num3: settings.fps = 30
+				case .Num4: settings.fps = 144
+				case .Num6: settings.fps = 60
+				case .Num9: settings.fps = 1000
+				}
+			}
+		case swin.Mouse_Button_Event:
+		case swin.Mouse_Move_Event:
+		case swin.Mouse_Wheel_Event:
+		}
 	}
 
 	// NOTE: this will only trigger on a proper quit, not on a task termination

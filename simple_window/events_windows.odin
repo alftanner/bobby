@@ -5,11 +5,20 @@ import "core:fmt"
 import "core:runtime"
 import win32 "core:sys/windows"
 
-_next_event :: proc(window: ^Window) {
-	msg: win32.MSG = ---
-	win32.GetMessageW(&msg, window.id, 0, 0)
-	win32.TranslateMessage(&msg)
-	win32.DispatchMessageW(&msg)
+_next_event :: proc(window: ^Window) -> Event {
+	win32.SwitchToFiber(window.message_fiber)
+	return window.last_event
+}
+
+_message_fiber_proc :: proc "stdcall" (data: rawptr) {
+	id := cast(win32.HWND)data
+
+	for {
+		msg: win32.MSG = ---
+		win32.GetMessageW(&msg, id, 0, 0)
+		win32.TranslateMessage(&msg)
+		win32.DispatchMessageW(&msg)
+	}
 }
 
 _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wparam: win32.WPARAM, lparam: win32.LPARAM) -> (result: win32.LRESULT) {
@@ -245,10 +254,8 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 	}
 
 	if ev != nil {
-		if window.event_handler != nil {
-			context = window.event_context.? or_else runtime.default_context()
-			window->event_handler(ev)
-		}
+		window.last_event = ev
+		win32.SwitchToFiber(window.main_fiber)
 	}
 
 	if _, ok := ev.(Close_Event); ok && !window.must_close {

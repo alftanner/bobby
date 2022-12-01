@@ -7,6 +7,8 @@ import win32 "core:sys/windows"
 Window_OS_Specific :: struct {
 	id: win32.HWND,
 	icon: win32.HICON,
+	main_fiber, message_fiber: rawptr,
+	last_event: Event,
 }
 
 // need to store pointer to the window for _default_window_proc
@@ -106,6 +108,9 @@ _create :: proc "contextless" (window: ^Window, pos: [2]int, size: [2]int, title
 	if window.icon != nil {
 		win32.SetClassLongPtrW(winid, win32.GCLP_HICON, auto_cast cast(uintptr)window.icon)
 	}
+
+	window.main_fiber = win32.ConvertThreadToFiber(nil)
+	window.message_fiber = win32.CreateFiber(0, _message_fiber_proc, window.id)
 
 	window_handle = window
 

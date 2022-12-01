@@ -32,8 +32,6 @@ Window :: struct {
 	// can modify
 	must_close: bool,
 	clear_color: image.RGB_Pixel,
-	event_handler: Event_Handler_Proc,
-	event_context: Maybe(runtime.Context),
 
 	// read-only
 	using rect:           Rect,
@@ -61,7 +59,7 @@ create :: proc(window: ^Window, pos: [2]int = {-1, -1}, size: [2]int = {-1, -1},
 
 destroy :: #force_inline proc(window: ^Window) { _destroy(window) }
 
-next_event :: #force_inline proc(window: ^Window) { _next_event(window) }
+next_event :: #force_inline proc(window: ^Window) -> Event { return _next_event(window) }
 
 get_working_area :: #force_inline proc() -> Rect { return _get_working_area() }
 
