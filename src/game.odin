@@ -2153,7 +2153,7 @@ update_world :: proc(t: ^thread.Thread) {
 	timer: swin.Timer
 	has_timer: bool
 	if global_state.has_precise_timer {
-		timer, has_timer = swin.create_timer(settings.fps)
+		timer, has_timer = swin.create_timer(TPS)
 		// NOTE: it is possible (not likely) that system has precise timer but fails to create it here
 		// in that case sleep will be very imprecise, but I'm not willing to handle this extreme edge case
 	}
@@ -2369,7 +2369,7 @@ load_texture :: proc(data: []byte) -> (t: swin.Texture2D) {
 }
 
 load_resources :: proc() {
-	general_font.texture = load_texture(#load("res/font.png"))
+	general_font.texture = load_texture(#load("../res/font.png"))
 	general_font.glyph_size = {5, 7}
 	general_font.table = make(map[rune][2]int)
 	for ch in ` 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ?'".,:;~!@#$^&_|\/%*+-=<>()[]{}` {
@@ -2407,7 +2407,7 @@ load_resources :: proc() {
 		general_font.table['Т'] = general_font.table['T']
 	}
 
-	atlas = load_texture(#load("res/atlas.png"))
+	atlas = load_texture(#load("../res/atlas.png"))
 
 	hud_font.texture = atlas
 	hud_font.glyph_size = {5, 8}
@@ -2427,8 +2427,8 @@ load_resources :: proc() {
 		sprites[s] = {pos * TILE_SIZE, {TILE_SIZE, TILE_SIZE}}
 	}
 
-	splashes = load_texture(#load("res/splashes.png"))
-	logo = load_texture(#load("res/logo.png"))
+	splashes = load_texture(#load("../res/splashes.png"))
+	logo = load_texture(#load("../res/logo.png"))
 }
 
 _main :: proc(allocator: runtime.Allocator) {

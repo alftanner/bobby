@@ -1,7 +1,6 @@
 package main
 
 when ODIN_DEBUG {
-	import "core:os"
 	import "core:mem"
 	import "core:log"
 }
