@@ -41,14 +41,12 @@ Settings :: struct #packed {
 	eggs_scoreboard: [len(egg_levels)]Score,
 
 	selected_levels: [Campaign]int,
-	sound: bool,
 	language: Language,
 }
 default_settings: Settings : {
 	fps = 30,
 	vsync = true,
-	show_stats = true when ODIN_DEBUG else false,
-	sound = true,
+	show_stats = true,
 }
 settings: Settings = default_settings
 
@@ -887,7 +885,6 @@ render :: proc(t: ^thread.Thread) {
 	menu_options: Menu_Options
 	selected_option, scoreboard_page: int
 	selected_levels: [Campaign]int
-	sound: bool
 	language: Language
 	player: Player
 
@@ -918,7 +915,6 @@ render :: proc(t: ^thread.Thread) {
 		}
 	}
 
-	frame: int
 	intro_alpha: u8
 	for {
 		start_tick := time.tick_now()
@@ -951,14 +947,12 @@ render :: proc(t: ^thread.Thread) {
 
 			scoreboard = world.scoreboard
 			if scoreboard_page != world.scoreboard_page || selected_option != world.selected_option ||
-			selected_levels != settings.selected_levels || sound != settings.sound ||
-			campaign != settings.campaign || language != settings.language {
+			selected_levels != settings.selected_levels || campaign != settings.campaign || language != settings.language {
 				cache_slow_redraw = true
 			}
 			scoreboard_page = world.scoreboard_page
 			selected_option = world.selected_option
 			selected_levels = settings.selected_levels
-			sound = settings.sound
 			campaign = settings.campaign
 			language = settings.language
 
@@ -979,9 +973,6 @@ render :: proc(t: ^thread.Thread) {
 		// for smooth drawing
 		frame_delta := f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now()))) / tick_time
 		player_pos := interpolate_tile_position(player, frame_delta)
-		// for testing
-		// TODO: remove it
-		frame += 1
 
 		draw_world_background: bool
 		bg_rect, bg_region, lvl_rect, lvl_region: swin.Rect
@@ -1623,18 +1614,6 @@ main_menu_scoreboard :: proc() {
 	show_scoreboard()
 }
 
-menu_sound :: proc() {
-	settings.sound = !settings.sound
-	#partial switch world.scene {
-	case .Pause_Menu:
-		world.keep_selected_option = true
-		show_pause_menu()
-	case .Main_Menu:
-		world.keep_selected_option = true
-		show_main_menu()
-	}
-}
-
 show_credits :: proc() {
 	if !world.credits.state {
 		if world.scene == .End {
@@ -1860,17 +1839,6 @@ show_main_menu :: proc() {
 
 	total_h += general_font.glyph_size[1]
 
-	{
-		option: Menu_Option = {func = menu_sound}
-		label_printf(&option, language_strings[settings.language][.Sound_On if settings.sound else .Sound_Off])
-		option.x = (BUFFER_W - option.size[0]) / 2
-		option.y = total_h
-		total_h += option.size[1]
-		small_array.push_back(&world.menu_options, option)
-	}
-
-	total_h += general_font.glyph_size[1]
-
 	when SUPPORT_LANGUAGES {
 		{
 			option: Menu_Option
@@ -1965,17 +1933,6 @@ show_pause_menu :: proc(clear := true) {
 	total_h += general_font.glyph_size[1]
 
 	// Help?
-
-	{
-		option: Menu_Option = {func = menu_sound}
-		label_printf(&option, language_strings[settings.language][.Sound_On if settings.sound else .Sound_Off])
-		option.x = (BUFFER_W - option.size[0]) / 2
-		option.y = total_h
-		total_h += option.size[1]
-		small_array.push_back(&world.menu_options, option)
-	}
-
-	total_h += general_font.glyph_size[1]
 
 	{
 		option: Menu_Option = {func = pause_menu_exit}
@@ -2082,16 +2039,12 @@ common_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) -
 		if state & {.Pressed, .Repeated} > {} {
 			if has_arrows && arrows[0].enabled {
 				arrows[0].func()
-			} else if option.func == menu_sound {
-				menu_sound()
 			}
 		}
 	case .Right:
 		if state & {.Pressed, .Repeated} > {} {
 			if has_arrows && arrows[1].enabled {
 				arrows[1].func()
-			} else if option.func == menu_sound {
-				menu_sound()
 			}
 		}
 	}
@@ -2130,8 +2083,10 @@ end_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 
 credits_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	if .Pressed in state {
+		if !world.credits.state {
+			world.keep_selected_option = true
+		}
 		world.credits.state = false
-		world.keep_selected_option = true
 		switch_scene(.Main_Menu)
 	}
 }
@@ -2599,5 +2554,4 @@ _main :: proc(allocator: runtime.Allocator) {
 TODO:
 complete egg campaign
 add manual?
-sound
 */
