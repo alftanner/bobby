@@ -47,19 +47,7 @@ cycles_lap_time :: proc(prev: ^u64) -> u64 {
 }
 
 when ODIN_OS == .Windows {
-	import win32 "core:sys/windows"
 	when ODIN_DEBUG do import pdb "pdb-1618b00" // https://github.com/DaseinPhaos/pdb
-
-	_restore_scheduler :: proc() {
-		win32.timeEndPeriod(1)
-	}
-
-	@(deferred_none=_restore_scheduler)
-	make_scheduler_precise :: proc() {
-		win32.timeBeginPeriod(1)
-	}
-} else {
-	make_scheduler_precise :: proc() {}
 }
 
 main :: proc() {
@@ -76,8 +64,6 @@ main :: proc() {
 		mem.tracking_allocator_init(&tracking_allocator, context.allocator)
 		context.allocator = mem.tracking_allocator(&tracking_allocator)
 	}
-
-	make_scheduler_precise()
 
 	_main(default_allocator)
 

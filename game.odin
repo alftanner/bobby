@@ -193,6 +193,7 @@ Key_State :: enum {
 }
 
 State :: struct {
+	has_precise_timer, scheduler_precise: bool,
 	// TODO: i128 with atomic_load/store
 	client_size: i64,
 
@@ -457,7 +458,7 @@ get_from_i32 :: #force_inline proc(p: ^i32) -> [2]i16 {
 	return transmute([2]i16)sync.atomic_load(p)
 }
 
-limit_frame :: proc(frame_time: time.Duration, frame_limit: uint, accurate := true) {
+limit_frame :: proc(frame_time: time.Duration, frame_limit: uint) {
 	if frame_limit <= 0 do return
 
 	ms_per_frame := time.Duration((1000.0 / f32(frame_limit)) * f32(time.Millisecond))
@@ -465,11 +466,7 @@ limit_frame :: proc(frame_time: time.Duration, frame_limit: uint, accurate := tr
 
 	if to_sleep <= 0 do return
 
-	if accurate {
-		time.accurate_sleep(to_sleep)
-	} else {
-		time.sleep(to_sleep)
-	}
+	time.sleep(to_sleep)
 }
 
 measure_or_draw_text :: proc(
@@ -876,7 +873,13 @@ draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, 
 	}
 }
 
-render :: proc(window: ^swin.Window) {
+render :: proc(t: ^thread.Thread) {
+	timer: swin.Timer
+	has_timer: bool
+	if !settings.vsync && global_state.has_precise_timer {
+		timer, has_timer = swin.create_timer(settings.fps)
+	}
+
 	scene: Scene
 	intro, fade: Animation
 	scoreboard: Scoreboard
@@ -1272,10 +1275,15 @@ render :: proc(window: ^swin.Window) {
 		}
 
 		sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
+
 		if settings.vsync {
 			swin.wait_vblank()
 		} else {
-			limit_frame(time.tick_since(start_tick), settings.fps)
+			if has_timer {
+				swin.wait_timer(&timer)
+			} else {
+				limit_frame(time.tick_since(start_tick), settings.fps)
+			}
 		}
 
 		client_size := get_from_i64(&global_state.client_size)
@@ -1283,7 +1291,7 @@ render :: proc(window: ^swin.Window) {
 		buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
 		off_x := (cast(int)client_size[0] - buf_w) / 2
 		off_y := (cast(int)client_size[1] - buf_h) / 2
-		swin.display_pixels(window, canvas, {{off_x, off_y}, {buf_w, buf_h}})
+		swin.display_pixels(&window, canvas, {{off_x, off_y}, {buf_w, buf_h}})
 
 		sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 	}
@@ -2187,6 +2195,14 @@ game_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 }
 
 update_world :: proc(t: ^thread.Thread) {
+	timer: swin.Timer
+	has_timer: bool
+	if global_state.has_precise_timer {
+		timer, has_timer = swin.create_timer(settings.fps)
+		// NOTE: it is possible (not likely) that system has precise timer but fails to create it here
+		// in that case sleep will be very imprecise, but I'm not willing to handle this extreme edge case
+	}
+
 	when ODIN_DEBUG {
 		show_main_menu()
 	} else {
@@ -2373,7 +2389,11 @@ update_world :: proc(t: ^thread.Thread) {
 
 		sync.atomic_store(&global_state.tick_work, time.tick_since(start_tick))
 
-		limit_frame(time.tick_since(start_tick), TPS, false) // NOTE: not using accurate timer for 30 TPS, should I?
+		if has_timer {
+			swin.wait_timer(&timer)
+		} else {
+			limit_frame(time.tick_since(start_tick), TPS)
+		}
 
 		sync.atomic_store(&global_state.tick_time, time.tick_since(start_tick))
 	}
@@ -2497,13 +2517,24 @@ _main :: proc(allocator: runtime.Allocator) {
 
 	save_to_i64(&global_state.client_size, {i32(window.client.size[0]), i32(window.client.size[1])})
 
+	global_state.has_precise_timer = swin.has_precise_timer()
+
+	if !global_state.has_precise_timer {
+		global_state.scheduler_precise = true
+		swin.make_scheduler_precise()
+	}
+
+	defer if global_state.scheduler_precise {
+		swin.restore_scheduler()
+	}
+
 	update_thread := thread.create_and_start(fn = update_world, priority = .High)
 	defer {
 		thread.terminate(update_thread, 0)
 		thread.destroy(update_thread)
 	}
 
-	render_thread := thread.create_and_start_with_poly_data(data = &window, fn = render, priority = .High)
+	render_thread := thread.create_and_start(fn = render, priority = .High)
 	defer {
 		thread.terminate(render_thread, 0)
 		thread.destroy(render_thread)
@@ -2544,16 +2575,8 @@ _main :: proc(allocator: runtime.Allocator) {
 			case .Pressed:
 				// TODO: remove these before release
 				#partial switch ev.key {
-				case .V: settings.vsync = !settings.vsync
 				case .I: settings.show_stats = !settings.show_stats
 				case .B: settings = default_settings
-				case .Num0: settings.fps = 0
-				case .Num1: settings.fps = 10
-				case .Num2: settings.fps = 200
-				case .Num3: settings.fps = 30
-				case .Num4: settings.fps = 144
-				case .Num6: settings.fps = 60
-				case .Num9: settings.fps = 1000
 				}
 			}
 		case swin.Mouse_Button_Event:
@@ -2562,7 +2585,7 @@ _main :: proc(allocator: runtime.Allocator) {
 		}
 	}
 
-	// NOTE: this will only trigger on a proper quit, not on a task termination
+	// NOTE: this will only trigger on a proper quit, not on task termination
 	{
 		data, err := json.marshal(settings, {pretty = true}, allocator)
 		assert(err == nil, fmt.tprint("Unable to save the game:", err))
