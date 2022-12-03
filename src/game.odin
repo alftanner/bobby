@@ -20,8 +20,8 @@ import "core:encoding/json"
 
 import swin "simple_window"
 
-SKY_BLUE: image.RGBA_Pixel : {139, 216, 245, 255}
 GAME_TITLE :: "Bobby Carrot Remastered"
+TIMER_FAIL :: "Failed to create a timer. I would use sleep() instead, but @mmozeiko said that sleeping is bad."
 
 Score :: struct {
 	time: time.Duration,
@@ -195,7 +195,6 @@ Keyboard_State :: struct {
 }
 
 State :: struct {
-	has_precise_timer, scheduler_precise: bool,
 	// TODO: i128 with atomic_load/store
 	client_size: i64,
 
@@ -456,7 +455,7 @@ save_to_i32 :: #force_inline proc(p: ^i32, a: [2]i16) {
 get_from_i32 :: #force_inline proc(p: ^i32) -> [2]i16 {
 	return transmute([2]i16)sync.atomic_load(p)
 }
-*/
+
 limit_frame :: proc(frame_time: time.Duration, frame_limit: uint) {
 	if frame_limit <= 0 do return
 
@@ -466,6 +465,42 @@ limit_frame :: proc(frame_time: time.Duration, frame_limit: uint) {
 	if to_sleep <= 0 do return
 
 	time.sleep(to_sleep)
+}
+*/
+
+assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Code_Location) -> ! {
+	error := fmt.tprintf("{}({}:{}) {}", loc.file_path, loc.line, loc.column, prefix)
+	if len(message) > 0 {
+		error = fmt.tprintf("{}: {}", error, message)
+	}
+
+	fmt.eprintln(error)
+
+	swin.show_message_box(.Error, "Error!", fmt.tprintf("{}: {}", prefix, message))
+
+	runtime.trap()
+}
+
+logger_proc :: proc(data: rawptr, level: runtime.Logger_Level, text: string, options: runtime.Logger_Options, location := #caller_location) {
+	if level == .Fatal {
+		fmt.eprintf("[{}] {}\n", level, text)
+		swin.show_message_box(.Error, "Error!", text)
+		runtime.trap()
+	} else if level == .Info {
+		fmt.eprintf("{}\n", text)
+	} else {
+		fmt.eprintf("[{}] {}\n", level, text)
+	}
+}
+
+cycles_lap_time :: proc(prev: ^u64) -> u64 {
+	cycles: u64
+	cycle_count := time.read_cycle_counter()
+	if prev^ != 0 {
+		cycles = cycle_count - prev^
+	}
+	prev^ = cycle_count
+	return cycles
 }
 
 measure_or_draw_text :: proc(
@@ -834,10 +869,18 @@ draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, 
 }
 
 render :: proc(t: ^thread.Thread) {
+	context.assertion_failure_proc = assertion_failure_proc
+	context.logger.procedure = logger_proc
+
 	timer: swin.Timer
-	has_timer: bool
-	if !settings.vsync && global_state.has_precise_timer {
-		timer, has_timer = swin.create_timer(settings.fps)
+	if !settings.vsync {
+		ok: bool
+		timer, ok = swin.create_timer(settings.fps)
+		when ODIN_OS == .Windows {
+			assert(ok, fmt.tprintf("{} Anyways, here is the error code: {}", TIMER_FAIL, swin._windows_get_last_error()))
+		} else {
+			assert(ok, TIMER_FAIL)
+		}
 	}
 
 	scene: Scene
@@ -1055,7 +1098,7 @@ render :: proc(t: ^thread.Thread) {
 			case .Credits:
 				draw_credits(&scene_texture, language)
 			case .None:
-				slice.fill(scene_texture.pixels, swin.color(SKY_BLUE))
+				slice.fill(scene_texture.pixels, swin.BLACK)
 			}
 
 			canvas_redraw = true
@@ -1250,11 +1293,7 @@ render :: proc(t: ^thread.Thread) {
 		if settings.vsync {
 			swin.wait_vblank()
 		} else {
-			if has_timer {
-				swin.wait_timer(&timer)
-			} else {
-				limit_frame(time.tick_since(start_tick), settings.fps)
-			}
+			swin.wait_timer(&timer)
 		}
 
 		client_size := get_from_i64(&global_state.client_size)
@@ -2217,12 +2256,18 @@ update_game :: proc() {
 }
 
 update_world :: proc(t: ^thread.Thread) {
+	context.assertion_failure_proc = assertion_failure_proc
+	context.logger.procedure = logger_proc
+
 	timer: swin.Timer
-	has_timer: bool
-	if global_state.has_precise_timer {
-		timer, has_timer = swin.create_timer(TPS)
-		// NOTE: it is possible (not likely) that system has precise timer but fails to create it here
-		// in that case sleep will be very imprecise, but I'm not willing to handle this extreme edge case
+	{
+		ok: bool
+		timer, ok = swin.create_timer(TPS)
+		when ODIN_OS == .Windows {
+			assert(ok, fmt.tprintf("{}\nAnyways, here is the error code: {}", TIMER_FAIL, swin._windows_get_last_error()))
+		} else {
+			assert(ok, TIMER_FAIL)
+		}
 	}
 
 	when ODIN_DEBUG {
@@ -2326,11 +2371,7 @@ update_world :: proc(t: ^thread.Thread) {
 
 		sync.atomic_store(&global_state.tick_work, time.tick_since(start_tick))
 
-		if has_timer {
-			swin.wait_timer(&timer)
-		} else {
-			limit_frame(time.tick_since(start_tick), TPS)
-		}
+		swin.wait_timer(&timer)
 
 		sync.atomic_store(&global_state.tick_time, time.tick_since(start_tick))
 	}
@@ -2414,6 +2455,9 @@ load_resources :: proc() {
 }
 
 _main :: proc(allocator: runtime.Allocator) {
+	context.assertion_failure_proc = assertion_failure_proc
+	context.logger.procedure = logger_proc
+
 	{
 		context.allocator = allocator
 		load_resources()
@@ -2448,20 +2492,18 @@ _main :: proc(allocator: runtime.Allocator) {
 	assert(swin.create(&window, pos, size, GAME_TITLE, {.Hide_Cursor}), "Failed to create window")
 	defer swin.destroy(&window)
 
-	//window.clear_color = SKY_BLUE.rgb
 	swin.set_resizable(&window, true)
 	swin.set_min_size(&window, {BUFFER_W, BUFFER_H})
 
 	save_to_i64(&global_state.client_size, {i32(window.client.size[0]), i32(window.client.size[1])})
 
-	global_state.has_precise_timer = swin.has_precise_timer()
-
-	if !global_state.has_precise_timer {
-		global_state.scheduler_precise = true
+	scheduler_precise: bool
+	if !swin.has_precise_timer() {
+		scheduler_precise = true
 		swin.make_scheduler_precise()
 	}
 
-	defer if global_state.scheduler_precise {
+	defer if scheduler_precise {
 		swin.restore_scheduler()
 	}
 

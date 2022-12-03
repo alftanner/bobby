@@ -7,6 +7,10 @@ _Timer :: struct {
 	handle: win32.HANDLE,
 }
 
+_windows_get_last_error :: proc() -> u32 {
+	return win32.GetLastError()
+}
+
 _has_precise_timer :: proc() -> bool {
 	handle := win32.CreateWaitableTimerExW(nil, nil, win32.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, win32.TIMER_ALL_ACCESS)
 	if handle == nil {
@@ -19,7 +23,11 @@ _has_precise_timer :: proc() -> bool {
 _create_timer :: proc(rate: uint) -> (timer: Timer, success: bool) {
 	rate := -win32.LARGE_INTEGER(10000000 / f32(rate))
 
-	handle := win32.CreateWaitableTimerExW(nil, nil, win32.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, win32.TIMER_ALL_ACCESS)
+	handle: win32.HANDLE
+	handle = win32.CreateWaitableTimerExW(nil, nil, win32.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, win32.TIMER_ALL_ACCESS)
+	if handle == nil { // if no precise timer, try a regular one
+		handle = win32.CreateWaitableTimerExW(nil, nil, 0, win32.TIMER_ALL_ACCESS)
+	}
 	if handle == nil {
 		return
 	}

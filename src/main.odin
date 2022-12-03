@@ -4,46 +4,6 @@ when ODIN_DEBUG {
 	import "core:mem"
 	import "core:log"
 }
-import "core:fmt"
-import "core:time"
-import "core:runtime"
-
-import swin "simple_window"
-
-assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Code_Location) -> ! {
-	error := fmt.tprintf("{}({}:{}) {}", loc.file_path, loc.line, loc.column, prefix)
-	if len(message) > 0 {
-		error = fmt.tprintf("{}: {}", error, message)
-	}
-
-	fmt.eprintln(error)
-
-	swin.show_message_box(.Error, "Error!", fmt.tprintf("{}: {}", prefix, message))
-
-	runtime.trap()
-}
-
-logger_proc :: proc(data: rawptr, level: runtime.Logger_Level, text: string, options: runtime.Logger_Options, location := #caller_location) {
-	if level == .Fatal {
-		fmt.eprintf("[{}] {}\n", level, text)
-		swin.show_message_box(.Error, "Error!", text)
-		runtime.trap()
-	} else if level == .Info {
-		fmt.eprintf("{}\n", text)
-	} else {
-		fmt.eprintf("[{}] {}\n", level, text)
-	}
-}
-
-cycles_lap_time :: proc(prev: ^u64) -> u64 {
-	cycles: u64
-	cycle_count := time.read_cycle_counter()
-	if prev^ != 0 {
-		cycles = cycle_count - prev^
-	}
-	prev^ = cycle_count
-	return cycles
-}
 
 when ODIN_OS == .Windows {
 	when ODIN_DEBUG do import pdb "pdb-1618b00" // https://github.com/DaseinPhaos/pdb
@@ -54,8 +14,6 @@ main :: proc() {
 		pdb.SetUnhandledExceptionFilter(pdb.dump_stack_trace_on_exception)
 	}
 
-	context.assertion_failure_proc = assertion_failure_proc
-	context.logger.procedure = logger_proc
 	default_allocator := context.allocator
 
 	when ODIN_DEBUG {

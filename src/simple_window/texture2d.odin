@@ -3,13 +3,13 @@ package simple_window
 import "core:mem"
 import "core:image"
 
-WHITE  :: image.RGBA_Pixel{255, 255, 255, 255}
-BLACK  :: image.RGBA_Pixel{0,   0,   0,   255}
-RED    :: image.RGBA_Pixel{237, 28,  36,  255}
-GREEN  :: image.RGBA_Pixel{28,  237, 36,  255}
-BLUE   :: image.RGBA_Pixel{63,  72,  204, 255}
-YELLOW :: image.RGBA_Pixel{255, 255, 72,  255}
-ORANGE :: image.RGBA_Pixel{255, 127, 39,  255}
+WHITE  := color({255, 255, 255, 255})
+BLACK  := color({0,   0,   0,   255})
+RED    := color({237, 28,  36,  255})
+GREEN  := color({28,  237, 36,  255})
+BLUE   := color({63,  72,  204, 255})
+YELLOW := color({255, 255, 72,  255})
+ORANGE := color({255, 127, 39,  255})
 
 Flip :: enum {
 	None,
