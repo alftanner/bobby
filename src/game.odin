@@ -110,7 +110,7 @@ Menu_Option :: struct {
 // redraw regions
 Region_Cache :: small_array.Small_Array(128, swin.Rect)
 // max tiles changed in an update
-Tile_Queue :: small_array.Small_Array(256, Sprite_Offset)
+Tile_Queue :: small_array.Small_Array(256, int)
 
 Menu_Options :: small_array.Small_Array(16, Menu_Option)
 Scoreboard :: small_array.Small_Array(128, Text_Label)
@@ -136,7 +136,7 @@ Player :: struct {
 }
 
 Level :: struct {
-	w, h: int,
+	size: [2]int,
 	tiles: []Tiles,
 	current, next: int,
 
@@ -642,27 +642,6 @@ interpolate_smooth_position :: #force_inline proc(p: Player, frame_delta: f32) -
 }
 */
 
-get_end_sprite :: proc(frame: uint) -> Sprite {
-	sprite := sprites[.End]
-	if world.level.can_end {
-		sprite = end_animation[frame]
-	}
-	return sprite
-}
-
-get_belt_sprite :: proc(frame: uint, t: Tiles) -> Sprite {
-	sprite := belt_animation[frame]
-	#partial switch t {
-	case .Belt_Right:
-		sprite.x += 64
-	case .Belt_Up:
-		sprite.x += 128
-	case .Belt_Down:
-		sprite.y += 16
-	}
-	return sprite
-}
-
 get_walking_sprite :: proc(frame: uint) -> Sprite_Offset {
 	sprite := walking_animation[frame]
 	#partial switch world.player.direction {
@@ -676,29 +655,40 @@ get_walking_sprite :: proc(frame: uint) -> Sprite_Offset {
 	return sprite
 }
 
-get_sprite_from_tile :: proc(pos: [2]int, animation: Animation) -> Sprite {
-	tile := get_level_tile(pos)
+get_sprite_from_pos :: proc(pos: [2]int, level: Level) -> Sprite {
+	tile := get_tile_from_pos(pos, level)
 	sprite: Sprite = sprites[.Ground]
 
 	switch tile {
 	case .Grass:
 		d: bit_set[Direction]
-		if get_level_tile({pos.x - 1, pos.y}) != .Grass do d += {.Left}
-		if get_level_tile({pos.x + 1, pos.y}) != .Grass do d += {.Right}
-		if get_level_tile({pos.x, pos.y - 1}) != .Grass do d += {.Up}
-		if get_level_tile({pos.x, pos.y + 1}) != .Grass do d += {.Down}
+		if get_tile_from_pos({pos.x - 1, pos.y}, level) != .Grass do d += {.Left}
+		if get_tile_from_pos({pos.x + 1, pos.y}, level) != .Grass do d += {.Right}
+		if get_tile_from_pos({pos.x, pos.y - 1}, level) != .Grass do d += {.Up}
+		if get_tile_from_pos({pos.x, pos.y + 1}, level) != .Grass do d += {.Down}
 		sprite = sprites[grass_sprites[d] or_else .Grass]
 	case .Fence:
 		d: bit_set[Direction]
-		if get_level_tile({pos.x - 1, pos.y}) == .Fence do d += {.Left}
-		if get_level_tile({pos.x + 1, pos.y}) == .Fence do d += {.Right}
-		//if get_level_tile({pos.x, pos.y - 1}) == .Fence do d += {.Up}
-		if get_level_tile({pos.x, pos.y + 1}) == .Fence do d += {.Down}
+		if get_tile_from_pos({pos.x - 1, pos.y}, level) == .Fence do d += {.Left}
+		if get_tile_from_pos({pos.x + 1, pos.y}, level) == .Fence do d += {.Right}
+		//if get_tile_from_pos({pos.x, pos.y - 1}, level) == .Fence do d += {.Up}
+		if get_tile_from_pos({pos.x, pos.y + 1}, level) == .Fence do d += {.Down}
 		sprite = sprites[fence_sprites[d] or_else .Fence_Down]
 	case .End:
-		sprite = get_end_sprite(animation.frame)
+		sprite = sprites[.End]
+		if level.can_end {
+			sprite = end_animation[level.animation.frame]
+		}
 	case .Belt_Right, .Belt_Left, .Belt_Down, .Belt_Up:
-		sprite = get_belt_sprite(animation.frame, tile)
+		sprite = belt_animation[level.animation.frame]
+		#partial switch tile {
+		case .Belt_Right:
+			sprite.x += 64
+		case .Belt_Up:
+			sprite.x += 128
+		case .Belt_Down:
+			sprite.y += 16
+		}
 	case .Start: sprite = sprites[.Start]
 	case .Carrot: sprite = sprites[.Carrot]
 	case .Carrot_Hole: sprite = sprites[.Carrot_Hole]
@@ -726,35 +716,6 @@ get_sprite_from_tile :: proc(pos: [2]int, animation: Animation) -> Sprite {
 	}
 
 	return sprite
-}
-
-collect_level_updates :: proc(q: ^Tile_Queue, animation: Animation) {
-	for changed, idx in &world.level.changes {
-		pos: [2]int = {idx%world.level.w, idx/world.level.w}
-		tile := get_level_tile(pos)
-
-		// always update belt tiles, and update end tile if the level can end
-		if !changed && !(tile in belt_tiles) && !(world.level.can_end && tile == .End) {
-			continue
-		}
-
-		changed = false
-		sprite := get_sprite_from_tile(pos, animation)
-		small_array.push_back(q, Sprite_Offset{sprite, pos})
-	}
-}
-
-draw_level :: proc(t: ^swin.Texture2D, animation: Animation) {
-	if len(t.pixels) > 0 {
-		swin.texture_destroy(t)
-	}
-
-	t^ = swin.texture_make(world.level.w * TILE_SIZE, world.level.h * TILE_SIZE)
-	for _, idx in world.level.tiles {
-		pos: [2]int = {idx%world.level.w, idx/world.level.w}
-		sprite := get_sprite_from_tile(pos, animation)
-		swin.draw_from_texture(t, atlas, pos * TILE_SIZE, sprite)
-	}
 }
 
 is_inside_rect :: #force_inline proc(p: [2]int, r: swin.Rect) -> bool {
@@ -871,6 +832,18 @@ draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, 
 	}
 }
 
+copy_level :: proc(dst, src: ^Level) {
+	dst.current = src.current
+	dst.next = src.next
+	dst.animation = src.animation
+	dst.carrots = src.carrots
+	dst.eggs = src.eggs
+	dst.can_end = src.can_end
+	dst.ended = src.ended
+	dst.score = src.score
+	copy(dst.tiles, src.tiles)
+}
+
 render :: proc(t: ^thread.Thread) {
 	timer: swin.Timer
 	has_timer: bool
@@ -888,10 +861,7 @@ render :: proc(t: ^thread.Thread) {
 	language: Language
 	player: Player
 
-	carrots, eggs: int
-	level_ended: bool
-	level_current: int
-	level_score: Score
+	level: Level
 
 	previous_tick: time.Tick
 	tick_time: f32
@@ -901,7 +871,6 @@ render :: proc(t: ^thread.Thread) {
 	canvas_cache, canvas_cache_slow: Region_Cache
 
 	backgrounds: [Campaign]swin.Texture2D
-	level_texture: swin.Texture2D
 	tiles_updated: Tile_Queue
 
 	canvas = swin.texture_make(BUFFER_W, BUFFER_H)
@@ -927,12 +896,26 @@ render :: proc(t: ^thread.Thread) {
 
 			if world.level.changed {
 				world.level.changed = false
-				small_array.clear(&tiles_updated)
-				draw_level(&level_texture, world.level.animation)
 				scene_redraw = true
-				diff = {f32(TILES_W - world.level.w), f32(TILES_H - world.level.h)}
+
+				if len(level.tiles) > 0 {
+					delete(level.tiles)
+				}
+				level.size = world.level.size
+				level.tiles = make([]Tiles, level.size[0] * level.size[1])
+
+				diff = {f32(TILES_W - level.size[0]), f32(TILES_H - level.size[1])}
 			}
-			collect_level_updates(&tiles_updated, world.level.animation)
+			copy_level(&level, &world.level)
+			// collect level updates
+			for changed, idx in &world.level.changes {
+				pos: [2]int = {idx%world.level.size[0], idx/world.level.size[0]}
+				tile := get_tile_from_pos(pos, world.level)
+				if changed || tile in belt_tiles || (tile == .End && world.level.can_end) {
+					small_array.push_back(&tiles_updated, idx)
+				}
+				changed = false
+			}
 
 			player = world.player
 			intro = world.intro
@@ -956,12 +939,6 @@ render :: proc(t: ^thread.Thread) {
 			campaign = settings.campaign
 			language = settings.language
 
-			carrots = world.level.carrots
-			eggs = world.level.eggs
-			level_current = world.level.current
-			level_score = world.level.score
-			level_ended = world.level.ended
-
 			previous_tick = global_state.previous_tick
 			tick_time = f32(time.duration_milliseconds(sync.atomic_load(&global_state.tick_time)))
 		}
@@ -975,7 +952,6 @@ render :: proc(t: ^thread.Thread) {
 		player_pos := interpolate_tile_position(player, frame_delta)
 
 		draw_world_background: bool
-		bg_rect, bg_region, lvl_rect, lvl_region: swin.Rect
 		#partial switch scene {
 		case .Game: // calculate offset
 			old_offset := offset
@@ -1005,35 +981,26 @@ render :: proc(t: ^thread.Thread) {
 				}
 			}
 
-			bg_rect.pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
-			bg_rect.pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
-			bg_rect.size = backgrounds[.Carrot_Harvest].size - bg_rect.pos
-			bg_region.size = bg_rect.size
-
-			lvl_rect.size = level_texture.size
-			lvl_region.pos.x = int(offset.x * TILE_SIZE)
-			lvl_region.pos.y = int(offset.y * TILE_SIZE)
-			lvl_region.size = lvl_rect.size
-
 			// redraw scene if camera moved
 			if old_offset != offset {
 				scene_redraw = true
 			}
 
-			{ // draw updated tiles to level texture
-				for tile in small_array.slice(&tiles_updated) {
-					swin.draw_from_texture(&level_texture, atlas, tile.offset * TILE_SIZE, tile)
-				}
-			}
-
 			if !scene_redraw {
+				lvl_offset: [2]int
+				lvl_offset.x = int(offset.x * TILE_SIZE)
+				lvl_offset.y = int(offset.y * TILE_SIZE)
+
 				// draw updated tiles to scene texture
-				for tile in small_array.pop_back_safe(&tiles_updated) {
-					pos := tile.offset * TILE_SIZE
+				for tile_idx in small_array.pop_back_safe(&tiles_updated) {
+					pos: [2]int = {tile_idx%level.size[0], tile_idx/level.size[0]}
+					sprite := get_sprite_from_pos(pos, level)
+
 					region: swin.Rect
-					region.pos = pos + lvl_region.pos
+					region.pos = (pos * TILE_SIZE) + lvl_offset
 					region.size = {TILE_SIZE, TILE_SIZE}
-					swin.draw_from_texture(&scene_texture, level_texture, region.pos, {pos, region.size})
+
+					swin.draw_from_texture(&scene_texture, atlas, region.pos, sprite)
 					small_array.push_back(&canvas_cache, region)
 				}
 			} else {
@@ -1050,10 +1017,22 @@ render :: proc(t: ^thread.Thread) {
 		if scene_redraw {
 			switch scene {
 			case .Game:
-				if draw_world_background {
-					swin.draw_from_texture(&scene_texture, backgrounds[.Carrot_Harvest], bg_region.pos, bg_rect)
+				lvl_offset: [2]int
+				lvl_offset.x = int(offset.x * TILE_SIZE)
+				lvl_offset.y = int(offset.y * TILE_SIZE)
+
+				if draw_world_background { // TODO: only draw needed parts, not the entire thing
+					bg_rect: swin.Rect
+					bg_rect.pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
+					bg_rect.pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
+					bg_rect.size = backgrounds[.Carrot_Harvest].size - bg_rect.pos
+					swin.draw_from_texture(&scene_texture, backgrounds[.Carrot_Harvest], {}, bg_rect)
 				}
-				swin.draw_from_texture(&scene_texture, level_texture, lvl_region.pos, lvl_rect)
+				for _, idx in level.tiles {
+					pos: [2]int = {idx%level.size[0], idx/level.size[0]}
+					sprite := get_sprite_from_pos(pos, level)
+					swin.draw_from_texture(&scene_texture, atlas, (pos * TILE_SIZE) + lvl_offset, sprite)
+				}
 			case .Pause_Menu, .Main_Menu, .Scoreboard:
 				texture := backgrounds[campaign]
 				if scene == .Pause_Menu {
@@ -1081,14 +1060,14 @@ render :: proc(t: ^thread.Thread) {
 			canvas_redraw = true
 		}
 
-		if !canvas_redraw { // cached rendering
-			for cache_region in small_array.pop_back_safe(&canvas_cache) {
-				swin.draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
-			}
-		} else {
+		if canvas_redraw {
 			small_array.clear(&canvas_cache)
 			small_array.clear(&canvas_cache_slow)
 			swin.draw_from_texture(&canvas, scene_texture, {}, {{}, scene_texture.size})
+		} else { // cached rendering
+			for cache_region in small_array.pop_back_safe(&canvas_cache) {
+				swin.draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
+			}
 		}
 
 		if canvas_redraw || cache_slow_redraw {
@@ -1108,7 +1087,7 @@ render :: proc(t: ^thread.Thread) {
 		// do scene specific drawing that gets into fast cache, such as player/HUD/etc
 		if scene == .Game {
 			// draw player
-			if !level_ended || (level_ended && player.fading.state) {
+			if !level.ended || (level.ended && player.fading.state) {
 				pos := (player_pos + offset) * TILE_SIZE
 				px := int(pos.x) + player.sprite.offset.x
 				py := int(pos.y) + player.sprite.offset.y
@@ -1117,17 +1096,17 @@ render :: proc(t: ^thread.Thread) {
 			}
 
 			// HUD
-			if !level_ended {
+			if !level.ended {
 				// left part
 				{
 					tbuf: [8]byte
-					time_str := fmt.bprintf(tbuf[:], "{:02i}:{:02i}", int(time.duration_minutes(level_score.time)), int(time.duration_seconds(level_score.time)) % 60)
+					time_str := fmt.bprintf(tbuf[:], "{:02i}:{:02i}", int(time.duration_minutes(level.score.time)), int(time.duration_seconds(level.score.time)) % 60)
 					small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, time_str, {2, 2}))
 				}
 				// level begin screen
-				if time.duration_seconds(level_score.time) < 2 {
+				if time.duration_seconds(level.score.time) < 2 {
 					tbuf: [16]byte
-					level_str := fmt.bprintf(tbuf[:], "{} {}", language_strings[settings.language][.Level], level_current + 1)
+					level_str := fmt.bprintf(tbuf[:], "{} {}", language_strings[settings.language][.Level], level.current + 1)
 					size := measure_text(general_font, level_str)
 					pos := (canvas.size - size) / 2
 					small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, level_str, pos))
@@ -1136,7 +1115,7 @@ render :: proc(t: ^thread.Thread) {
 				{
 					pos: [2]int = {canvas.size[0] - 2, 2}
 
-					if carrots > 0 {
+					if level.carrots > 0 {
 						sprite := hud_sprites[.Carrot]
 						pos.x -= sprite.size[0]
 						swin.draw_from_texture(&canvas, atlas, pos, sprite)
@@ -1144,7 +1123,7 @@ render :: proc(t: ^thread.Thread) {
 						pos.x -= 2
 
 						tbuf: [8]byte
-						str := strconv.itoa(tbuf[:], carrots)
+						str := strconv.itoa(tbuf[:], level.carrots)
 						{
 							size := measure_text(hud_font, str)
 							pos.x -= size[0]
@@ -1154,7 +1133,7 @@ render :: proc(t: ^thread.Thread) {
 						pos.x = canvas.size[0] - 2
 					}
 
-					if eggs > 0 {
+					if level.eggs > 0 {
 						sprite := hud_sprites[.Egg]
 						pos.x -= sprite.size[0]
 						swin.draw_from_texture(&canvas, atlas, pos, sprite)
@@ -1162,7 +1141,7 @@ render :: proc(t: ^thread.Thread) {
 						pos.x -= 2
 
 						tbuf: [8]byte
-						str := strconv.itoa(tbuf[:], eggs)
+						str := strconv.itoa(tbuf[:], level.eggs)
 						{
 							size := measure_text(hud_font, str)
 							pos.x -= size[0]
@@ -1197,7 +1176,7 @@ render :: proc(t: ^thread.Thread) {
 			}
 
 			// level end screen
-			if level_ended && !player.fading.state {
+			if level.ended && !player.fading.state {
 				total_h: int
 				success := hud_sprites[.Success]
 				success_x := (canvas.size[0] - success.size[0]) / 2
@@ -1206,9 +1185,9 @@ render :: proc(t: ^thread.Thread) {
 				tbuf: [64]byte
 				time_str := fmt.bprintf(tbuf[:32], "{}: {:02i}:{:02i}:{:02i}",
 					language_strings[settings.language][.Time],
-					int(time.duration_minutes(level_score.time)),
-					int(time.duration_seconds(level_score.time)) % 60,
-					int(time.duration_milliseconds(level_score.time)) % 60,
+					int(time.duration_minutes(level.score.time)),
+					int(time.duration_seconds(level.score.time)) % 60,
+					int(time.duration_milliseconds(level.score.time)) % 60,
 				)
 				time_x, time_h: int
 				{
@@ -1218,7 +1197,7 @@ render :: proc(t: ^thread.Thread) {
 				}
 				total_h += time_h + general_font.glyph_size[1]
 
-				steps_str := fmt.bprintf(tbuf[32:], "{}: {}", language_strings[settings.language][.Steps], level_score.steps)
+				steps_str := fmt.bprintf(tbuf[32:], "{}: {}", language_strings[settings.language][.Steps], level.score.steps)
 				steps_x, steps_h: int
 				{
 					size := measure_text(general_font, steps_str)
@@ -1303,11 +1282,11 @@ get_buffer_scale :: proc(client_w, client_h: i32) -> int {
 
 can_move :: proc(pos: [2]int, d: Direction) -> bool {
 	pos := pos
-	current_tile := get_level_tile(pos)
+	current_tile := get_tile_from_pos(pos, world.level)
 
 	#partial switch d {
 	case .Right:
-		if pos.x == world.level.w - 1 {
+		if pos.x == world.level.size[0] - 1 {
 			return false
 		}
 		pos.x += 1
@@ -1317,7 +1296,7 @@ can_move :: proc(pos: [2]int, d: Direction) -> bool {
 		}
 		pos.x -= 1
 	case .Down:
-		if pos.y == world.level.h - 1 {
+		if pos.y == world.level.size[1] - 1 {
 			return false
 		}
 		pos.y += 1
@@ -1327,7 +1306,7 @@ can_move :: proc(pos: [2]int, d: Direction) -> bool {
 		}
 		pos.y -= 1
 	}
-	tile := get_level_tile(pos)
+	tile := get_tile_from_pos(pos, world.level)
 
 	if tile == .Grass || tile == .Fence || tile == .Egg {
 		return false
@@ -1446,23 +1425,24 @@ move_player :: #force_inline proc(d: Direction) {
 	start_moving(d)
 }
 
-get_level_tile :: #force_inline proc(pos: [2]int) -> Tiles #no_bounds_check {
-	if pos.y < 0 || pos.y >= world.level.h || pos.x < 0 || pos.x >= world.level.w {
+get_tile_from_pos :: #force_inline proc(pos: [2]int, level: Level) -> Tiles #no_bounds_check {
+	if pos.x < 0 || pos.x >= level.size[0] || pos.y < 0 || pos.y >= level.size[1] {
 		return .Grass
 	}
 
-	return world.level.tiles[(pos.y * world.level.w) + pos.x]
+	idx := (pos.y * level.size[0]) + pos.x
+	return level.tiles[idx]
 }
 
 set_level_tile :: #force_inline proc(pos: [2]int, t: Tiles) {
-	idx := (pos.y * world.level.w) + pos.x
+	idx := (pos.y * world.level.size[0]) + pos.x
 	world.level.tiles[idx] = t
 	world.level.changes[idx] = true
 }
 
 press_red_button :: proc() {
 	for tile, idx in world.level.tiles {
-		pos: [2]int = {idx%world.level.w, idx/world.level.w}
+		pos: [2]int = {idx%world.level.size[0], idx/world.level.size[0]}
 		switch {
 		case tile == .Red_Button:
 			set_level_tile(pos, .Red_Button_Pressed)
@@ -1477,7 +1457,7 @@ press_red_button :: proc() {
 
 press_yellow_button :: proc() {
 	for tile, idx in world.level.tiles {
-		pos: [2]int = {idx%world.level.w, idx/world.level.w}
+		pos: [2]int = {idx%world.level.size[0], idx/world.level.size[0]}
 		switch {
 		case tile == .Yellow_Button:
 			set_level_tile(pos, .Yellow_Button_Pressed)
@@ -1524,8 +1504,8 @@ move_player_to_tile :: proc(d: Direction) {
 	case .Down:  world.player.y += 1
 	case .Up:    world.player.y -= 1
 	}
-	original_tile := get_level_tile(original_pos)
-	current_tile := get_level_tile(world.player)
+	original_tile := get_tile_from_pos(original_pos, world.level)
+	current_tile := get_tile_from_pos(world.player, world.level)
 
 	switch {
 	case original_tile == .Trap:
@@ -1977,14 +1957,14 @@ load_level :: proc() {
 		show_end()
 		return
 	}
-	world.level.w = len(levels[next][0])
-	world.level.h = len(levels[next])
+	world.level.size[0] = len(levels[next][0])
+	world.level.size[1] = len(levels[next])
 	lvl = levels[next]
 
 	world.level.current = next
 	world.level.next = next
-	world.level.tiles = make([]Tiles, world.level.w * world.level.h)
-	world.level.changes = make([]bool, world.level.w * world.level.h)
+	world.level.tiles = make([]Tiles, world.level.size[0] * world.level.size[1])
+	world.level.changes = make([]bool, world.level.size[0] * world.level.size[1])
 	world.level.changed = true
 
 	for row, y in lvl {
@@ -2285,7 +2265,7 @@ update_world :: proc(t: ^thread.Thread) {
 
 				// belts
 				if world.player.belt {
-					tile := get_level_tile(world.player)
+					tile := get_tile_from_pos(world.player, world.level)
 					#partial switch tile {
 					case .Belt_Left:  move_player(.Left)
 					case .Belt_Right: move_player(.Right)
