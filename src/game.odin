@@ -107,8 +107,8 @@ Menu_Option :: struct {
 	}),
 }
 
-// redraw regions
-Region_Cache :: small_array.Small_Array(128, swin.Rect)
+// max redraw regions
+Region_Cache :: small_array.Small_Array(512, swin.Rect)
 // max tiles changed in an update
 Tile_Queue :: small_array.Small_Array(256, int)
 
