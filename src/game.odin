@@ -189,6 +189,11 @@ Key_State :: enum {
 	Released,
 }
 
+Keyboard_State :: struct {
+	lock: sync.Mutex,
+	keys: [swin.Key_Code]bit_set[Key_State],
+}
+
 State :: struct {
 	has_precise_timer, scheduler_precise: bool,
 	// TODO: i128 with atomic_load/store
@@ -200,10 +205,7 @@ State :: struct {
 	tick_work, tick_time: time.Duration,
 	previous_tick: time.Tick,
 
-	keyboard: struct {
-		lock: sync.Mutex,
-		keys: [swin.Key_Code]bit_set[Key_State],
-	},
+	keyboard: Keyboard_State,
 }
 global_state: State
 
@@ -446,7 +448,7 @@ save_to_i64 :: #force_inline proc(p: ^i64, a: [2]i32) {
 get_from_i64 :: #force_inline proc(p: ^i64) -> [2]i32 {
 	return transmute([2]i32)sync.atomic_load(p)
 }
-
+/*
 save_to_i32 :: #force_inline proc(p: ^i32, a: [2]i16) {
 	sync.atomic_store(p, transmute(i32)a)
 }
@@ -454,7 +456,7 @@ save_to_i32 :: #force_inline proc(p: ^i32, a: [2]i16) {
 get_from_i32 :: #force_inline proc(p: ^i32) -> [2]i16 {
 	return transmute([2]i16)sync.atomic_load(p)
 }
-
+*/
 limit_frame :: proc(frame_time: time.Duration, frame_limit: uint) {
 	if frame_limit <= 0 do return
 
@@ -500,7 +502,7 @@ measure_or_draw_text :: proc(
 	return
 }
 
-draw_text :: proc(
+draw_text :: #force_inline proc(
 	canvas: ^swin.Texture2D,
 	font: Font,
 	text: string,
@@ -511,7 +513,7 @@ draw_text :: proc(
 	return measure_or_draw_text(canvas, font, text, pos, color, shadow_color)
 }
 
-measure_text :: proc(font: Font, text: string) -> [2]int {
+measure_text :: #force_inline proc(font: Font, text: string) -> [2]int {
 	region := measure_or_draw_text(nil, font, text, {}, {}, {}, true)
 	return region.size
 }
@@ -716,7 +718,7 @@ get_sprite_from_pos :: proc(pos: [2]int, level: Level) -> Sprite {
 
 	return sprite
 }
-
+/*
 is_inside_rect :: #force_inline proc(p: [2]int, r: swin.Rect) -> bool {
 	return p.x >= r.x && p.x < r.x + r.size[0] && p.y >= r.y && p.y < r.y + r.size[1]
 }
@@ -731,7 +733,7 @@ rect_intersection :: proc(r1, r2: swin.Rect) -> swin.Rect {
 	}
 	return {}
 }
-
+*/
 draw_scoreboard :: proc(t: ^swin.Texture2D, q: ^Region_Cache, labels: []Text_Label, page: int) {
 	if len(labels) == 0 do return
 
@@ -831,27 +833,6 @@ draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, 
 	}
 }
 
-copy_level :: proc(dst, src: ^Level, q: ^Tile_Queue) {
-	dst.current = src.current
-	dst.next = src.next
-	dst.animation = src.animation
-	dst.carrots = src.carrots
-	dst.eggs = src.eggs
-	dst.can_end = src.can_end
-	dst.ended = src.ended
-	dst.score = src.score
-
-	// copy and collect updates
-	for tile, idx in src.tiles {
-		dst_tile := dst.tiles[idx]
-		dst.tiles[idx] = tile
-
-		if dst_tile != tile || tile in belt_tiles || (tile == .End && src.can_end) {
-			small_array.push_back(q, idx)
-		}
-	}
-}
-
 render :: proc(t: ^thread.Thread) {
 	timer: swin.Timer
 	has_timer: bool
@@ -914,7 +895,25 @@ render :: proc(t: ^thread.Thread) {
 
 				diff = {f32(TILES_W - level.size[0]), f32(TILES_H - level.size[1])}
 			}
-			copy_level(&level, &world.level, &tiles_updated)
+			{ // copy and collect updates
+				level.current = world.level.current
+				level.next = world.level.next
+				level.animation = world.level.animation
+				level.carrots = world.level.carrots
+				level.eggs = world.level.eggs
+				level.can_end = world.level.can_end
+				level.ended = world.level.ended
+				level.score = world.level.score
+
+				for tile, idx in world.level.tiles {
+					old_tile := level.tiles[idx]
+					level.tiles[idx] = tile
+
+					if old_tile != tile || tile in belt_tiles || (tile == .End && level.can_end) {
+						small_array.push_back(&tiles_updated, idx)
+					}
+				}
+			}
 
 			player = world.player
 			intro = world.intro
@@ -929,8 +928,11 @@ render :: proc(t: ^thread.Thread) {
 
 			scoreboard = world.scoreboard
 			if scoreboard_page != world.scoreboard_page || selected_option != world.selected_option ||
-			selected_levels != settings.selected_levels || campaign != settings.campaign || language != settings.language {
+			selected_levels != settings.selected_levels || language != settings.language {
 				cache_slow_redraw = true
+			}
+			if campaign != settings.campaign {
+				scene_redraw = true
 			}
 			scoreboard_page = world.scoreboard_page
 			selected_option = world.selected_option
@@ -2125,6 +2127,95 @@ game_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	}
 }
 
+update_game :: proc() {
+	// animations
+	switch {
+	case world.player.fading.state:
+		world.player.fading.frame = world.player.fading.timer / FADING_ANIM_FRAME_LEN
+
+		if world.player.fading.frame >= len(fading_animation) {
+			world.player.fading.state = false
+			world.player.fading.timer = 0
+			world.player.fading.frame = 0
+		} else {
+			if world.level.current == world.level.next {
+				// reverse frames when spawning
+				world.player.fading.frame = len(fading_animation) - 1 - world.player.fading.frame
+			}
+			world.player.sprite = fading_animation[world.player.fading.frame]
+		}
+
+		world.player.fading.timer += 1
+	case world.player.dying.state:
+		world.player.dying.frame = world.player.dying.timer / DYING_ANIM_FRAME_LEN
+
+		if world.player.dying.frame >= len(dying_animation) {
+			if world.player.dying.timer - (len(dying_animation) * DYING_ANIM_FRAME_LEN) >= LAYING_DEAD_TIME {
+				world.player.dying.state = false
+				world.player.dying.timer = 0
+				world.player.dying.frame = 0
+				load_level()
+			}
+		} else {
+			world.player.sprite = dying_animation[world.player.dying.frame]
+		}
+
+		world.player.dying.timer += 1
+	case world.player.walking.state:
+		world.player.walking.frame = world.player.walking.timer / WALKING_ANIM_FRAME_LEN
+
+		if world.player.walking.frame + 1 >= WALKING_ANIM_LEN {
+			world.player.walking.state = false
+			world.player.walking.timer = 0
+			world.player.walking.frame = 0
+			move_player_to_tile(world.player.direction)
+		} else {
+			if world.player.belt {
+				world.player.sprite = get_walking_sprite(0)
+			} else {
+				world.player.sprite = get_walking_sprite(world.player.walking.frame + 1)
+			}
+		}
+
+		world.player.walking.timer += 1
+	case world.player.idle.state:
+		world.player.idle.frame = world.player.idle.timer / IDLE_ANIM_FRAME_LEN
+
+		world.player.idle.frame %= len(idle_animation)
+		world.player.sprite = idle_animation[world.player.idle.frame]
+
+		world.player.idle.timer += 1
+	case !world.level.ended:
+		world.player.sprite = get_walking_sprite(0)
+
+		if world.player.idle.timer > IDLING_TIME {
+			player_animation_start(&world.player.idle)
+		}
+
+		world.player.idle.timer += 1
+	}
+
+	world.level.animation.frame = world.level.animation.timer / LEVEL_ANIM_FRAME_LEN
+	world.level.animation.frame %= len(end_animation) // all persistent animations have the same amount of frames
+	world.level.animation.timer += 1
+
+	// belts
+	if world.player.belt {
+		tile := get_tile_from_pos(world.player, world.level)
+		#partial switch tile {
+		case .Belt_Left:  move_player(.Left)
+		case .Belt_Right: move_player(.Right)
+		case .Belt_Down:  move_player(.Down)
+		case .Belt_Up:    move_player(.Up)
+		}
+	}
+
+	// track level time
+	if !world.level.ended {
+		world.level.score.time += sync.atomic_load(&global_state.tick_time)
+	}
+}
+
 update_world :: proc(t: ^thread.Thread) {
 	timer: swin.Timer
 	has_timer: bool
@@ -2176,7 +2267,10 @@ update_world :: proc(t: ^thread.Thread) {
 				}
 			}
 
-			if world.scene == .Intro {
+			switch world.scene {
+			case .Game:
+				update_game()
+			case .Intro:
 				if world.intro.state {
 					if world.intro.timer >= INTRO_LENGTH {
 						world.intro.state = false
@@ -2185,95 +2279,23 @@ update_world :: proc(t: ^thread.Thread) {
 
 					world.intro.timer += 1
 				}
-			}
-
-			if world.scene == .Game {
-				// animations
-				switch {
-				case world.player.fading.state:
-					world.player.fading.frame = world.player.fading.timer / FADING_ANIM_FRAME_LEN
-
-					if world.player.fading.frame >= len(fading_animation) {
-						world.player.fading.state = false
-						world.player.fading.timer = 0
-						world.player.fading.frame = 0
-					} else {
-						if world.level.current == world.level.next {
-							// reverse frames when spawning
-							world.player.fading.frame = len(fading_animation) - 1 - world.player.fading.frame
-						}
-						world.player.sprite = fading_animation[world.player.fading.frame]
+			case .Credits:
+				if world.credits.state {
+					if world.credits.timer >= CREDITS_LENGTH {
+						world.credits.state = false
+						switch_scene(.Main_Menu)
 					}
-
-					world.player.fading.timer += 1
-				case world.player.dying.state:
-					world.player.dying.frame = world.player.dying.timer / DYING_ANIM_FRAME_LEN
-
-					if world.player.dying.frame >= len(dying_animation) {
-						if world.player.dying.timer - (len(dying_animation) * DYING_ANIM_FRAME_LEN) >= LAYING_DEAD_TIME {
-							world.player.dying.state = false
-							world.player.dying.timer = 0
-							world.player.dying.frame = 0
-							load_level()
-						}
-					} else {
-						world.player.sprite = dying_animation[world.player.dying.frame]
-					}
-
-					world.player.dying.timer += 1
-				case world.player.walking.state:
-					world.player.walking.frame = world.player.walking.timer / WALKING_ANIM_FRAME_LEN
-
-					if world.player.walking.frame + 1 >= WALKING_ANIM_LEN {
-						world.player.walking.state = false
-						world.player.walking.timer = 0
-						world.player.walking.frame = 0
-						move_player_to_tile(world.player.direction)
-					} else {
-						if world.player.belt {
-							world.player.sprite = get_walking_sprite(0)
-						} else {
-							world.player.sprite = get_walking_sprite(world.player.walking.frame + 1)
-						}
-					}
-
-					world.player.walking.timer += 1
-				case world.player.idle.state:
-					world.player.idle.frame = world.player.idle.timer / IDLE_ANIM_FRAME_LEN
-
-					world.player.idle.frame %= len(idle_animation)
-					world.player.sprite = idle_animation[world.player.idle.frame]
-
-					world.player.idle.timer += 1
-				case !world.level.ended:
-					world.player.sprite = get_walking_sprite(0)
-
-					if world.player.idle.timer > IDLING_TIME {
-						player_animation_start(&world.player.idle)
-					}
-
-					world.player.idle.timer += 1
+					world.credits.timer += 1
 				}
-
-				world.level.animation.frame = world.level.animation.timer / LEVEL_ANIM_FRAME_LEN
-				world.level.animation.frame %= len(end_animation) // all persistent animations have the same amount of frames
-				world.level.animation.timer += 1
-
-				// belts
-				if world.player.belt {
-					tile := get_tile_from_pos(world.player, world.level)
-					#partial switch tile {
-					case .Belt_Left:  move_player(.Left)
-					case .Belt_Right: move_player(.Right)
-					case .Belt_Down:  move_player(.Down)
-					case .Belt_Up:    move_player(.Up)
+			case .End:
+				if world.end.state {
+					if world.end.timer >= END_LENGTH {
+						world.end.state = false
+						switch_scene(.Credits)
 					}
+					world.end.timer += 1
 				}
-
-				// track level time
-				if !world.level.ended {
-					world.level.score.time += sync.atomic_load(&global_state.tick_time)
-				}
+			case .Main_Menu, .Pause_Menu, .Scoreboard, .None:
 			}
 
 			if world.fade.state {
@@ -2297,22 +2319,6 @@ update_world :: proc(t: ^thread.Thread) {
 					case .None: world.scene = world.next_scene
 					}
 				}
-			}
-
-			if world.credits.state {
-				if world.credits.timer >= CREDITS_LENGTH {
-					world.credits.state = false
-					switch_scene(.Main_Menu)
-				}
-				world.credits.timer += 1
-			}
-
-			if world.end.state {
-				if world.end.timer >= END_LENGTH {
-					world.end.state = false
-					switch_scene(.Credits)
-				}
-				world.end.timer += 1
 			}
 
 			global_state.previous_tick = time.tick_now()
