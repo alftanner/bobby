@@ -1,5 +1,5 @@
 //+private
-package simple_window
+package spl
 
 import "core:fmt"
 import "core:runtime"

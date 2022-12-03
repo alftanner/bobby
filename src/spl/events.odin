@@ -1,4 +1,4 @@
-package simple_window
+package spl
 
 Event_Handler_Proc :: #type proc(window: ^Window, event: Event)
 

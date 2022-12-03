@@ -18,7 +18,7 @@ import "core:mem"
 import "core:fmt"
 import "core:encoding/json"
 
-import swin "simple_window"
+import spl "spl"
 
 GAME_TITLE :: "Bobby Carrot Remastered"
 TIMER_FAIL :: "Failed to create a timer. I would use sleep() instead, but @mmozeiko said that sleeping is bad."
@@ -28,8 +28,7 @@ Score :: struct {
 	steps: int,
 }
 
-// since settings will be saved to the file, they probably should be packed
-Settings :: struct #packed {
+Settings :: struct {
 	fps: uint,
 	vsync: bool,
 	show_stats: bool,
@@ -68,13 +67,13 @@ WINDOW_W :: BUFFER_W * DEFAULT_SCALE
 WINDOW_H :: BUFFER_H * DEFAULT_SCALE
 
 Font :: struct {
-	using texture: swin.Texture2D,
+	using texture: spl.Texture2D,
 	table: map[rune][2]int,
 	glyph_size: [2]int,
 }
 general_font: Font
 hud_font: Font
-atlas, splashes, logo: swin.Texture2D
+atlas, splashes, logo: spl.Texture2D
 
 Direction :: enum {
 	None,
@@ -84,7 +83,7 @@ Direction :: enum {
 	Up,
 }
 
-Sprite :: swin.Rect
+Sprite :: spl.Rect
 
 Sprite_Offset :: struct {
 	using sprite: Sprite,
@@ -92,7 +91,7 @@ Sprite_Offset :: struct {
 }
 
 Text_Label :: struct {
-	using rect: swin.Rect,
+	using rect: spl.Rect,
 	text_buf: [64]byte,
 	text_len: int,
 }
@@ -108,7 +107,7 @@ Menu_Option :: struct {
 }
 
 // max redraw regions
-Region_Cache :: small_array.Small_Array(512, swin.Rect)
+Region_Cache :: small_array.Small_Array(512, spl.Rect)
 // max tiles changed in an update
 Tile_Queue :: small_array.Small_Array(256, int)
 
@@ -191,7 +190,7 @@ Key_State :: enum {
 
 Keyboard_State :: struct {
 	lock: sync.Mutex,
-	keys: [swin.Key_Code]bit_set[Key_State],
+	keys: [spl.Key_Code]bit_set[Key_State],
 }
 
 State :: struct {
@@ -208,7 +207,7 @@ State :: struct {
 }
 global_state: State
 
-window: swin.Window
+window: spl.Window
 
 SPACE_BETWEEN_ARROW_AND_TEXT :: 3
 RIGHT_ARROW :: Sprite{{183, 115}, {5, 9}}
@@ -476,7 +475,7 @@ assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Code
 
 	fmt.eprintln(error)
 
-	swin.show_message_box(.Error, "Error!", fmt.tprintf("{}: {}", prefix, message))
+	spl.show_message_box(.Error, "Error!", fmt.tprintf("{}: {}", prefix, message))
 
 	runtime.trap()
 }
@@ -484,7 +483,7 @@ assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Code
 logger_proc :: proc(data: rawptr, level: runtime.Logger_Level, text: string, options: runtime.Logger_Options, location := #caller_location) {
 	if level == .Fatal {
 		fmt.eprintf("[{}] {}\n", level, text)
-		swin.show_message_box(.Error, "Error!", text)
+		spl.show_message_box(.Error, "Error!", text)
 		runtime.trap()
 	} else if level == .Info {
 		fmt.eprintf("{}\n", text)
@@ -504,14 +503,14 @@ cycles_lap_time :: proc(prev: ^u64) -> u64 {
 }
 
 measure_or_draw_text :: proc(
-	canvas: ^swin.Texture2D,
+	canvas: ^spl.Texture2D,
 	font: Font,
 	text: string,
 	pos: [2]int,
 	color: image.RGB_Pixel,
 	shadow_color: image.RGB_Pixel,
 	no_draw := false,
-) -> (region: swin.Rect) {
+) -> (region: spl.Rect) {
 	pos := pos
 	region.x = pos.x
 	region.y = pos.y
@@ -525,8 +524,8 @@ measure_or_draw_text :: proc(
 
 		glyph_pos := font.table[ch] or_else font.table['?']
 		if !no_draw {
-			swin.draw_from_texture(canvas, font.texture, pos + 1, {glyph_pos, font.glyph_size}, .None, shadow_color)
-			swin.draw_from_texture(canvas, font.texture, pos, {glyph_pos, font.glyph_size}, .None, color)
+			spl.draw_from_texture(canvas, font.texture, pos + 1, {glyph_pos, font.glyph_size}, .None, shadow_color)
+			spl.draw_from_texture(canvas, font.texture, pos, {glyph_pos, font.glyph_size}, .None, color)
 		}
 
 		pos.x += font.glyph_size[0] + 1
@@ -538,13 +537,13 @@ measure_or_draw_text :: proc(
 }
 
 draw_text :: #force_inline proc(
-	canvas: ^swin.Texture2D,
+	canvas: ^spl.Texture2D,
 	font: Font,
 	text: string,
 	pos: [2]int,
 	color: image.RGB_Pixel = {255, 255, 255},
 	shadow_color: image.RGB_Pixel = {0, 0, 0},
-) -> (region: swin.Rect) {
+) -> (region: spl.Rect) {
 	return measure_or_draw_text(canvas, font, text, pos, color, shadow_color)
 }
 
@@ -553,7 +552,7 @@ measure_text :: #force_inline proc(font: Font, text: string) -> [2]int {
 	return region.size
 }
 
-draw_stats :: proc(canvas: ^swin.Texture2D) -> swin.Rect {
+draw_stats :: proc(canvas: ^spl.Texture2D) -> spl.Rect {
 	@thread_local time_waited: time.Duration
 	@thread_local lastu, lastf, fps, tps: Average_Calculator
 
@@ -631,8 +630,8 @@ get_intro_alpha :: proc(intro: Animation, frame_delta: f32) -> u8 {
 	return alpha
 }
 
-draw_credits :: proc(t: ^swin.Texture2D, language: Language) {
-	slice.fill(t.pixels, swin.BLACK)
+draw_credits :: proc(t: ^spl.Texture2D, language: Language) {
+	slice.fill(t.pixels, spl.BLACK)
 
 	str := language_strings[language][.Credits_Original]
 	str2 := language_strings[language][.Credits_Remastered]
@@ -644,7 +643,7 @@ draw_credits :: proc(t: ^swin.Texture2D, language: Language) {
 
 	draw_text(t, general_font, str, {(t.size[0] - str_size[0]) / 2, off_y})
 	off_y += str_size[1] + general_font.glyph_size[1]
-	swin.draw_from_texture(t, logo, {(t.size[0] - logo.size[0]) / 2, off_y}, {{}, logo.size})
+	spl.draw_from_texture(t, logo, {(t.size[0] - logo.size[0]) / 2, off_y}, {{}, logo.size})
 	off_y += logo.size[1] + general_font.glyph_size[1]
 	draw_text(t, general_font, str2, {(t.size[0] - str2_size[0]) / 2, off_y})
 }
@@ -754,11 +753,11 @@ get_sprite_from_pos :: proc(pos: [2]int, level: Level) -> Sprite {
 	return sprite
 }
 /*
-is_inside_rect :: #force_inline proc(p: [2]int, r: swin.Rect) -> bool {
+is_inside_rect :: #force_inline proc(p: [2]int, r: spl.Rect) -> bool {
 	return p.x >= r.x && p.x < r.x + r.size[0] && p.y >= r.y && p.y < r.y + r.size[1]
 }
 
-rect_intersection :: proc(r1, r2: swin.Rect) -> swin.Rect {
+rect_intersection :: proc(r1, r2: spl.Rect) -> spl.Rect {
 	pos: [2]int = {max(r1.x, r2.x), max(r1.y, r2.y)}
 	right_x := min(r1.x + r1.size[0], r2.x + r2.size[0])
 	bottom_y := min(r1.y + r1.size[1], r2.y + r2.size[1])
@@ -769,7 +768,7 @@ rect_intersection :: proc(r1, r2: swin.Rect) -> swin.Rect {
 	return {}
 }
 */
-draw_scoreboard :: proc(t: ^swin.Texture2D, q: ^Region_Cache, labels: []Text_Label, page: int) {
+draw_scoreboard :: proc(t: ^spl.Texture2D, q: ^Region_Cache, labels: []Text_Label, page: int) {
 	if len(labels) == 0 do return
 
 	DISABLED :: image.RGB_Pixel{75, 75, 75}
@@ -785,7 +784,7 @@ draw_scoreboard :: proc(t: ^swin.Texture2D, q: ^Region_Cache, labels: []Text_Lab
 	page_h := general_font.glyph_size[1] * 19
 	y := (BUFFER_H - page_h) / 2
 
-	up_arrow, down_arrow: swin.Rect
+	up_arrow, down_arrow: spl.Rect
 	up_arrow.size = UP_ARROW.size
 	down_arrow.size = UP_ARROW.size
 
@@ -812,7 +811,7 @@ draw_scoreboard :: proc(t: ^swin.Texture2D, q: ^Region_Cache, labels: []Text_Lab
 		if page == 0 {
 			color = DISABLED
 		}
-		swin.draw_from_texture(t, atlas, up_arrow.pos, UP_ARROW, .None, color)
+		spl.draw_from_texture(t, atlas, up_arrow.pos, UP_ARROW, .None, color)
 		small_array.push_back(q, up_arrow)
 	}
 	{
@@ -820,12 +819,12 @@ draw_scoreboard :: proc(t: ^swin.Texture2D, q: ^Region_Cache, labels: []Text_Lab
 		if page == pages - 1 {
 			color = DISABLED
 		}
-		swin.draw_from_texture(t, atlas, down_arrow.pos, UP_ARROW, .Vertical, color)
+		spl.draw_from_texture(t, atlas, down_arrow.pos, UP_ARROW, .Vertical, color)
 		small_array.push_back(q, down_arrow)
 	}
 }
 
-draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, selected: int) {
+draw_menu :: proc(t: ^spl.Texture2D, q: ^Region_Cache, options: []Menu_Option, selected: int) {
 	DISABLED :: image.RGB_Pixel{75, 75, 75}
 	NORMAL :: image.RGB_Pixel{145, 145, 145}
 	SELECTED :: image.RGB_Pixel{255, 255, 255}
@@ -846,7 +845,7 @@ draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, 
 			if !option.arrows.?[0].enabled {
 				color = DISABLED
 			}
-			swin.draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .Horizontal, color)
+			spl.draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .Horizontal, color)
 			x += RIGHT_ARROW.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT
 			region.size[0] += (RIGHT_ARROW.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT) * 2
 			region.y -= 1
@@ -861,7 +860,7 @@ draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, 
 				color = DISABLED
 			}
 			x += option.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT
-			swin.draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .None, color)
+			spl.draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .None, color)
 		}
 
 		small_array.push_back(q, region)
@@ -872,12 +871,12 @@ render :: proc(t: ^thread.Thread) {
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
 
-	timer: swin.Timer
+	timer: spl.Timer
 	if !settings.vsync {
 		ok: bool
-		timer, ok = swin.create_timer(settings.fps)
+		timer, ok = spl.create_timer(settings.fps)
 		when ODIN_OS == .Windows {
-			assert(ok, fmt.tprintf("{} Anyways, here is the error code: {}", TIMER_FAIL, swin._windows_get_last_error()))
+			assert(ok, fmt.tprintf("{} Anyways, here is the error code: {}", TIMER_FAIL, spl._windows_get_last_error()))
 		} else {
 			assert(ok, TIMER_FAIL)
 		}
@@ -899,20 +898,20 @@ render :: proc(t: ^thread.Thread) {
 	tick_time: f32
 	diff, offset: [2]f32
 
-	canvas, scene_texture: swin.Texture2D
+	canvas, scene_texture: spl.Texture2D
 	canvas_cache, canvas_cache_slow: Region_Cache
 
-	backgrounds: [Campaign]swin.Texture2D
+	backgrounds: [Campaign]spl.Texture2D
 	tiles_updated: Tile_Queue
 
-	canvas = swin.texture_make(BUFFER_W, BUFFER_H)
-	scene_texture = swin.texture_make(BUFFER_W, BUFFER_H)
+	canvas = spl.texture_make(BUFFER_W, BUFFER_H)
+	scene_texture = spl.texture_make(BUFFER_W, BUFFER_H)
 	for bg, c in &backgrounds {
-		bg = swin.texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
+		bg = spl.texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
 		sprite := sprites[.Grass if c == .Carrot_Harvest else .Ground]
 		for y in 0..=TILES_H do for x in 0..=TILES_W {
 			pos: [2]int = {x, y}
-			swin.draw_from_texture(&bg, atlas, pos * TILE_SIZE, sprite)
+			spl.draw_from_texture(&bg, atlas, pos * TILE_SIZE, sprite)
 		}
 	}
 
@@ -1040,11 +1039,11 @@ render :: proc(t: ^thread.Thread) {
 					pos: [2]int = {tile_idx%level.size[0], tile_idx/level.size[0]}
 					sprite := get_sprite_from_pos(pos, level)
 
-					region: swin.Rect
+					region: spl.Rect
 					region.pos = (pos * TILE_SIZE) + lvl_offset
 					region.size = {TILE_SIZE, TILE_SIZE}
 
-					swin.draw_from_texture(&scene_texture, atlas, region.pos, sprite)
+					spl.draw_from_texture(&scene_texture, atlas, region.pos, sprite)
 					small_array.push_back(&canvas_cache, region)
 				}
 			} else {
@@ -1066,39 +1065,39 @@ render :: proc(t: ^thread.Thread) {
 				lvl_offset.y = int(offset.y * TILE_SIZE)
 
 				if draw_world_background { // TODO: only draw needed parts, not the entire thing
-					bg_rect: swin.Rect
+					bg_rect: spl.Rect
 					bg_rect.pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
 					bg_rect.pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
 					bg_rect.size = backgrounds[.Carrot_Harvest].size - bg_rect.pos
-					swin.draw_from_texture(&scene_texture, backgrounds[.Carrot_Harvest], {}, bg_rect)
+					spl.draw_from_texture(&scene_texture, backgrounds[.Carrot_Harvest], {}, bg_rect)
 				}
 				for _, idx in level.tiles {
 					pos: [2]int = {idx%level.size[0], idx/level.size[0]}
 					sprite := get_sprite_from_pos(pos, level)
-					swin.draw_from_texture(&scene_texture, atlas, (pos * TILE_SIZE) + lvl_offset, sprite)
+					spl.draw_from_texture(&scene_texture, atlas, (pos * TILE_SIZE) + lvl_offset, sprite)
 				}
 			case .Pause_Menu, .Main_Menu, .Scoreboard:
 				texture := backgrounds[campaign]
 				if scene == .Pause_Menu {
 					texture = canvas
 				}
-				swin.draw_from_texture(&scene_texture, texture, {}, {{}, scene_texture.size})
-				swin.draw_rect(&scene_texture, {{}, scene_texture.size}, {0, 0, 0, 0xaa})
+				spl.draw_from_texture(&scene_texture, texture, {}, {{}, scene_texture.size})
+				spl.draw_rect(&scene_texture, {{}, scene_texture.size}, {0, 0, 0, 0xaa})
 			case .Intro:
-				slice.fill(scene_texture.pixels, swin.BLACK)
+				slice.fill(scene_texture.pixels, spl.BLACK)
 
 				off := (scene_texture.size - INTRO_SPLASH.size) / 2
-				swin.draw_from_texture(&scene_texture, splashes, off, INTRO_SPLASH)
-				swin.draw_rect(&scene_texture, {off, INTRO_SPLASH.size}, {0, 0, 0, intro_alpha})
+				spl.draw_from_texture(&scene_texture, splashes, off, INTRO_SPLASH)
+				spl.draw_rect(&scene_texture, {off, INTRO_SPLASH.size}, {0, 0, 0, intro_alpha})
 			case .End:
-				slice.fill(scene_texture.pixels, swin.BLACK)
+				slice.fill(scene_texture.pixels, spl.BLACK)
 
 				off := (scene_texture.size - END_SPLASH.size) / 2
-				swin.draw_from_texture(&scene_texture, splashes, off, END_SPLASH)
+				spl.draw_from_texture(&scene_texture, splashes, off, END_SPLASH)
 			case .Credits:
 				draw_credits(&scene_texture, language)
 			case .None:
-				slice.fill(scene_texture.pixels, swin.BLACK)
+				slice.fill(scene_texture.pixels, spl.BLACK)
 			}
 
 			canvas_redraw = true
@@ -1107,16 +1106,16 @@ render :: proc(t: ^thread.Thread) {
 		if canvas_redraw {
 			small_array.clear(&canvas_cache)
 			small_array.clear(&canvas_cache_slow)
-			swin.draw_from_texture(&canvas, scene_texture, {}, {{}, scene_texture.size})
+			spl.draw_from_texture(&canvas, scene_texture, {}, {{}, scene_texture.size})
 		} else { // cached rendering
 			for cache_region in small_array.pop_back_safe(&canvas_cache) {
-				swin.draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
+				spl.draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
 			}
 		}
 
 		if canvas_redraw || cache_slow_redraw {
 			for cache_region in small_array.pop_back_safe(&canvas_cache_slow) {
-				swin.draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
+				spl.draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
 			}
 
 			// slow cached drawing
@@ -1135,8 +1134,8 @@ render :: proc(t: ^thread.Thread) {
 				pos := (player_pos + offset) * TILE_SIZE
 				px := int(pos.x) + player.sprite.offset.x
 				py := int(pos.y) + player.sprite.offset.y
-				swin.draw_from_texture(&canvas, atlas, {px, py}, player.sprite)
-				small_array.push_back(&canvas_cache, swin.Rect{{px, py}, player.sprite.size})
+				spl.draw_from_texture(&canvas, atlas, {px, py}, player.sprite)
+				small_array.push_back(&canvas_cache, spl.Rect{{px, py}, player.sprite.size})
 			}
 
 			// HUD
@@ -1162,8 +1161,8 @@ render :: proc(t: ^thread.Thread) {
 					if level.carrots > 0 {
 						sprite := hud_sprites[.Carrot]
 						pos.x -= sprite.size[0]
-						swin.draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, swin.Rect{pos, sprite.size})
+						spl.draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, spl.Rect{pos, sprite.size})
 						pos.x -= 2
 
 						tbuf: [8]byte
@@ -1180,8 +1179,8 @@ render :: proc(t: ^thread.Thread) {
 					if level.eggs > 0 {
 						sprite := hud_sprites[.Egg]
 						pos.x -= sprite.size[0]
-						swin.draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, swin.Rect{pos, sprite.size})
+						spl.draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, spl.Rect{pos, sprite.size})
 						pos.x -= 2
 
 						tbuf: [8]byte
@@ -1198,22 +1197,22 @@ render :: proc(t: ^thread.Thread) {
 					if player.silver_key {
 						sprite := hud_sprites[.Silver_Key]
 						pos.x -= sprite.size[0]
-						swin.draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, swin.Rect{pos, sprite.size})
+						spl.draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, spl.Rect{pos, sprite.size})
 						pos.x -= 2
 					}
 					if player.golden_key {
 						sprite := hud_sprites[.Golden_Key]
 						pos.x -= sprite.size[0]
-						swin.draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, swin.Rect{pos, sprite.size})
+						spl.draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, spl.Rect{pos, sprite.size})
 						pos.x -= 2
 					}
 					if player.copper_key {
 						sprite := hud_sprites[.Copper_Key]
 						pos.x -= sprite.size[0]
-						swin.draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, swin.Rect{pos, sprite.size})
+						spl.draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, spl.Rect{pos, sprite.size})
 						pos.x -= 2
 					}
 				}
@@ -1262,8 +1261,8 @@ render :: proc(t: ^thread.Thread) {
 				pos: [2]int
 				pos.x = (canvas.size[0] - success.size[0]) / 2
 				pos.y = (canvas.size[1] - total_h) / 2
-				swin.draw_from_texture(&canvas, atlas, pos, success)
-				small_array.push_back(&canvas_cache, swin.Rect{pos, success.size})
+				spl.draw_from_texture(&canvas, atlas, pos, success)
+				small_array.push_back(&canvas_cache, spl.Rect{pos, success.size})
 				pos.y += success.size[1] + (general_font.glyph_size[1] * 2)
 
 				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, time_str, {time_x, pos.y}))
@@ -1278,10 +1277,10 @@ render :: proc(t: ^thread.Thread) {
 
 		fade_alpha := get_fade_alpha(fade, frame_delta)
 		if fade_alpha != 0 {
-			swin.draw_rect(&canvas, {{}, canvas.size}, {0, 0, 0, fade_alpha})
+			spl.draw_rect(&canvas, {{}, canvas.size}, {0, 0, 0, fade_alpha})
 			small_array.clear(&canvas_cache_slow)
 			small_array.clear(&canvas_cache)
-			small_array.push_back(&canvas_cache, swin.Rect{{}, canvas.size})
+			small_array.push_back(&canvas_cache, spl.Rect{{}, canvas.size})
 		}
 
 		if settings.show_stats {
@@ -1291,9 +1290,9 @@ render :: proc(t: ^thread.Thread) {
 		sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
 		if settings.vsync {
-			swin.wait_vblank()
+			spl.wait_vblank()
 		} else {
-			swin.wait_timer(&timer)
+			spl.wait_timer(&timer)
 		}
 
 		client_size := get_from_i64(&global_state.client_size)
@@ -1301,7 +1300,7 @@ render :: proc(t: ^thread.Thread) {
 		buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
 		off_x := (cast(int)client_size[0] - buf_w) / 2
 		off_y := (cast(int)client_size[1] - buf_h) / 2
-		swin.display_pixels(&window, canvas, {{off_x, off_y}, {buf_w, buf_h}})
+		spl.display_pixels(&window, canvas, {{off_x, off_y}, {buf_w, buf_h}})
 
 		sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 	}
@@ -2024,7 +2023,7 @@ load_level :: proc() {
 	player_animation_start(&world.player.fading)
 }
 
-common_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) -> (handled: bool) {
+common_menu_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) -> (handled: bool) {
 	option := small_array.get_ptr(&world.menu_options, world.selected_option)
 	arrows, has_arrows := option.arrows.?
 
@@ -2069,7 +2068,7 @@ common_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) -
 	return
 }
 
-pause_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+pause_menu_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 	if common_menu_key_handler(key, state) do return
 
 	#partial switch key {
@@ -2080,25 +2079,25 @@ pause_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	}
 }
 
-main_menu_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+main_menu_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 	if common_menu_key_handler(key, state) do return
 }
 
-intro_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+intro_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 	if .Pressed in state {
 		world.intro.state = false
 		switch_scene(.Main_Menu)
 	}
 }
 
-end_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+end_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 	if .Pressed in state {
 		world.end.state = false
 		switch_scene(.Credits)
 	}
 }
 
-credits_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+credits_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 	if .Pressed in state {
 		if !world.credits.state {
 			world.keep_selected_option = true
@@ -2108,7 +2107,7 @@ credits_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	}
 }
 
-scoreboard_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+scoreboard_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 	pages := ((world.scoreboard.len - 1) / 10) + 1
 
 	if .Pressed in state {
@@ -2130,7 +2129,7 @@ scoreboard_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
 	}
 }
 
-game_key_handler :: proc(key: swin.Key_Code, state: bit_set[Key_State]) {
+game_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 	shift := .Held in global_state.keyboard.keys[.LShift]
 
 	#partial switch key {
@@ -2259,12 +2258,12 @@ update_world :: proc(t: ^thread.Thread) {
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
 
-	timer: swin.Timer
+	timer: spl.Timer
 	{
 		ok: bool
-		timer, ok = swin.create_timer(TPS)
+		timer, ok = spl.create_timer(TPS)
 		when ODIN_OS == .Windows {
-			assert(ok, fmt.tprintf("{}\nAnyways, here is the error code: {}", TIMER_FAIL, swin._windows_get_last_error()))
+			assert(ok, fmt.tprintf("{}\nAnyways, here is the error code: {}", TIMER_FAIL, spl._windows_get_last_error()))
 		} else {
 			assert(ok, TIMER_FAIL)
 		}
@@ -2371,22 +2370,22 @@ update_world :: proc(t: ^thread.Thread) {
 
 		sync.atomic_store(&global_state.tick_work, time.tick_since(start_tick))
 
-		swin.wait_timer(&timer)
+		spl.wait_timer(&timer)
 
 		sync.atomic_store(&global_state.tick_time, time.tick_since(start_tick))
 	}
 }
 
-load_texture :: proc(data: []byte) -> (t: swin.Texture2D) {
+load_texture :: proc(data: []byte) -> (t: spl.Texture2D) {
 	img, err := image.load(data)
 	assert(err == nil, fmt.tprint(err))
 	defer image.destroy(img)
 
-	t = swin.texture_make(img.width, img.height)
+	t = spl.texture_make(img.width, img.height)
 
 	pixels := mem.slice_data_cast([]image.RGBA_Pixel, bytes.buffer_to_bytes(&img.pixels))
 	for p, i in pixels {
-		t.pixels[i] = swin.color(p)
+		t.pixels[i] = spl.color(p)
 	}
 	return
 }
@@ -2484,27 +2483,27 @@ _main :: proc(allocator: runtime.Allocator) {
 	pos: [2]int
 	size: [2]int = {WINDOW_W, WINDOW_H}
 	{ // center the window
-		wr := swin.get_working_area()
+		wr := spl.get_working_area()
 		pos = wr.pos + ((wr.size / 2) - (size / 2))
 	}
 
 	// Open window
-	assert(swin.create(&window, pos, size, GAME_TITLE, {.Hide_Cursor}), "Failed to create window")
-	defer swin.destroy(&window)
+	assert(spl.create(&window, pos, size, GAME_TITLE, {.Hide_Cursor}), "Failed to create window")
+	defer spl.destroy(&window)
 
-	swin.set_resizable(&window, true)
-	swin.set_min_size(&window, {BUFFER_W, BUFFER_H})
+	spl.set_resizable(&window, true)
+	spl.set_min_size(&window, {BUFFER_W, BUFFER_H})
 
 	save_to_i64(&global_state.client_size, {i32(window.client.size[0]), i32(window.client.size[1])})
 
 	scheduler_precise: bool
-	if !swin.has_precise_timer() {
+	if !spl.has_precise_timer() {
 		scheduler_precise = true
-		swin.make_scheduler_precise()
+		spl.make_scheduler_precise()
 	}
 
 	defer if scheduler_precise {
-		swin.restore_scheduler()
+		spl.restore_scheduler()
 	}
 
 	update_thread := thread.create_and_start(fn = update_world, priority = .High)
@@ -2520,9 +2519,9 @@ _main :: proc(allocator: runtime.Allocator) {
 	}
 
 	for !window.must_close {
-		switch ev in swin.next_event(&window) {
-		case swin.Close_Event:
-		case swin.Focus_Event:
+		switch ev in spl.next_event(&window) {
+		case spl.Close_Event:
+		case spl.Focus_Event:
 			if !ev.focused {
 				sync.guard(&global_state.keyboard.lock)
 				for state in &global_state.keyboard.keys {
@@ -2532,12 +2531,12 @@ _main :: proc(allocator: runtime.Allocator) {
 					}
 				}
 			}
-		case swin.Draw_Event:
-		case swin.Resize_Event:
+		case spl.Draw_Event:
+		case spl.Resize_Event:
 			save_to_i64(&global_state.client_size, {i32(window.client.size[0]), i32(window.client.size[1])})
-		case swin.Move_Event:
-		case swin.Character_Event:
-		case swin.Keyboard_Event:
+		case spl.Move_Event:
+		case spl.Character_Event:
+		case spl.Keyboard_Event:
 			{
 				sync.guard(&global_state.keyboard.lock)
 				state := global_state.keyboard.keys[ev.key]
@@ -2558,9 +2557,9 @@ _main :: proc(allocator: runtime.Allocator) {
 				case .B: settings = default_settings
 				}
 			}
-		case swin.Mouse_Button_Event:
-		case swin.Mouse_Move_Event:
-		case swin.Mouse_Wheel_Event:
+		case spl.Mouse_Button_Event:
+		case spl.Mouse_Move_Event:
+		case spl.Mouse_Wheel_Event:
 		}
 	}
 

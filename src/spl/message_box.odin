@@ -1,4 +1,4 @@
-package simple_window
+package spl
 
 Message_Box_Flags :: enum {
 	Error,
