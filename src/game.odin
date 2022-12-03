@@ -148,7 +148,6 @@ Level :: struct {
 
 	// for rendering
 	changed: bool,
-	changes: []bool,
 }
 
 Scene :: enum {
@@ -832,7 +831,7 @@ draw_menu :: proc(t: ^swin.Texture2D, q: ^Region_Cache, options: []Menu_Option, 
 	}
 }
 
-copy_level :: proc(dst, src: ^Level) {
+copy_level :: proc(dst, src: ^Level, q: ^Tile_Queue) {
 	dst.current = src.current
 	dst.next = src.next
 	dst.animation = src.animation
@@ -841,7 +840,16 @@ copy_level :: proc(dst, src: ^Level) {
 	dst.can_end = src.can_end
 	dst.ended = src.ended
 	dst.score = src.score
-	copy(dst.tiles, src.tiles)
+
+	// copy and collect updates
+	for tile, idx in src.tiles {
+		dst_tile := dst.tiles[idx]
+		dst.tiles[idx] = tile
+
+		if dst_tile != tile || tile in belt_tiles || (tile == .End && src.can_end) {
+			small_array.push_back(q, idx)
+		}
+	}
 }
 
 render :: proc(t: ^thread.Thread) {
@@ -906,16 +914,7 @@ render :: proc(t: ^thread.Thread) {
 
 				diff = {f32(TILES_W - level.size[0]), f32(TILES_H - level.size[1])}
 			}
-			copy_level(&level, &world.level)
-			// collect level updates
-			for changed, idx in &world.level.changes {
-				pos: [2]int = {idx%world.level.size[0], idx/world.level.size[0]}
-				tile := get_tile_from_pos(pos, world.level)
-				if changed || tile in belt_tiles || (tile == .End && world.level.can_end) {
-					small_array.push_back(&tiles_updated, idx)
-				}
-				changed = false
-			}
+			copy_level(&level, &world.level, &tiles_updated)
 
 			player = world.player
 			intro = world.intro
@@ -1437,7 +1436,6 @@ get_tile_from_pos :: #force_inline proc(pos: [2]int, level: Level) -> Tiles #no_
 set_level_tile :: #force_inline proc(pos: [2]int, t: Tiles) {
 	idx := (pos.y * world.level.size[0]) + pos.x
 	world.level.tiles[idx] = t
-	world.level.changes[idx] = true
 }
 
 press_red_button :: proc() {
@@ -1939,7 +1937,6 @@ load_level :: proc() {
 
 	if len(world.level.tiles) != 0 {
 		delete(world.level.tiles)
-		delete(world.level.changes)
 	}
 
 	world.player = {}
@@ -1964,7 +1961,6 @@ load_level :: proc() {
 	world.level.current = next
 	world.level.next = next
 	world.level.tiles = make([]Tiles, world.level.size[0] * world.level.size[1])
-	world.level.changes = make([]bool, world.level.size[0] * world.level.size[1])
 	world.level.changed = true
 
 	for row, y in lvl {
