@@ -20,7 +20,7 @@ _has_precise_timer :: proc() -> bool {
 	return true
 }
 
-_create_timer :: proc(rate: uint) -> (timer: Timer, success: bool) {
+_create_timer :: proc(timer: ^Timer, rate: uint) -> (success: bool) {
 	rate := -win32.LARGE_INTEGER(10000000 / f32(rate))
 
 	handle: win32.HANDLE
@@ -40,6 +40,11 @@ _create_timer :: proc(rate: uint) -> (timer: Timer, success: bool) {
 	timer.rate = rate
 	timer.handle = handle
 	return
+}
+
+_destroy_timer :: proc(timer: ^Timer) {
+	win32.CloseHandle(timer.handle)
+	timer^ = {}
 }
 
 _wait_timer :: proc(timer: ^Timer) {

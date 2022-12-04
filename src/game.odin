@@ -873,8 +873,7 @@ render :: proc(t: ^thread.Thread) {
 
 	timer: spl.Timer
 	if !settings.vsync {
-		ok: bool
-		timer, ok = spl.create_timer(settings.fps)
+		ok := spl.create_timer(&timer, settings.fps)
 		when ODIN_OS == .Windows {
 			assert(ok, fmt.tprintf("{} Anyways, here is the error code: {}", TIMER_FAIL, spl._windows_get_last_error()))
 		} else {
@@ -2260,8 +2259,7 @@ update_world :: proc(t: ^thread.Thread) {
 
 	timer: spl.Timer
 	{
-		ok: bool
-		timer, ok = spl.create_timer(TPS)
+		ok := spl.create_timer(&timer, TPS)
 		when ODIN_OS == .Windows {
 			assert(ok, fmt.tprintf("{}\nAnyways, here is the error code: {}", TIMER_FAIL, spl._windows_get_last_error()))
 		} else {
