@@ -503,7 +503,7 @@ cycles_lap_time :: proc(prev: ^u64) -> u64 {
 }
 
 measure_or_draw_text :: proc(
-	canvas: ^spl.Texture2D,
+	t: ^spl.Texture2D,
 	font: Font,
 	text: string,
 	pos: [2]int,
@@ -524,8 +524,8 @@ measure_or_draw_text :: proc(
 
 		glyph_pos := font.table[ch] or_else font.table['?']
 		if !no_draw {
-			spl.draw_from_texture(canvas, font.texture, pos + 1, {glyph_pos, font.glyph_size}, .None, shadow_color)
-			spl.draw_from_texture(canvas, font.texture, pos, {glyph_pos, font.glyph_size}, .None, color)
+			spl.draw_from_texture(t, font.texture, pos + 1, {glyph_pos, font.glyph_size}, .None, shadow_color)
+			spl.draw_from_texture(t, font.texture, pos, {glyph_pos, font.glyph_size}, .None, color)
 		}
 
 		pos.x += font.glyph_size[0] + 1
@@ -537,14 +537,14 @@ measure_or_draw_text :: proc(
 }
 
 draw_text :: #force_inline proc(
-	canvas: ^spl.Texture2D,
+	t: ^spl.Texture2D,
 	font: Font,
 	text: string,
 	pos: [2]int,
 	color: image.RGB_Pixel = {255, 255, 255},
 	shadow_color: image.RGB_Pixel = {0, 0, 0},
 ) -> (region: spl.Rect) {
-	return measure_or_draw_text(canvas, font, text, pos, color, shadow_color)
+	return measure_or_draw_text(t, font, text, pos, color, shadow_color)
 }
 
 measure_text :: #force_inline proc(font: Font, text: string) -> [2]int {
@@ -552,7 +552,7 @@ measure_text :: #force_inline proc(font: Font, text: string) -> [2]int {
 	return region.size
 }
 
-draw_stats :: proc(canvas: ^spl.Texture2D) -> spl.Rect {
+draw_stats :: proc(t: ^spl.Texture2D) -> spl.Rect {
 	@thread_local time_waited: time.Duration
 	@thread_local lastu, lastf, fps, tps: Average_Calculator
 
@@ -583,9 +583,9 @@ draw_stats :: proc(canvas: ^spl.Texture2D) -> spl.Rect {
 		u32(math.round(tps.average)), lastu.average,
 	)
 
-	pos: [2]int = {canvas.size[0] - 2, canvas.size[1] - 2}
+	pos: [2]int = {t.size[0] - 2, t.size[1] - 2}
 	pos -= measure_text(general_font, text)
-	return draw_text(canvas, general_font, text, pos)
+	return draw_text(t, general_font, text, pos)
 }
 
 get_fade_alpha :: proc(fade: Animation, frame_delta: f32) -> u8 {
