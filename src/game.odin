@@ -45,7 +45,6 @@ Settings :: struct {
 default_settings: Settings : {
 	fps = 30,
 	vsync = true,
-	show_stats = true,
 }
 settings: Settings = default_settings
 
