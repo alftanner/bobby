@@ -1294,28 +1294,10 @@ render :: proc(t: ^thread.Thread) {
 			spl.wait_timer(&timer)
 		}
 
-		client_size := get_from_i64(&global_state.client_size)
-		scale := get_buffer_scale(client_size[0], client_size[1])
-		buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
-		off_x := (cast(int)client_size[0] - buf_w) / 2
-		off_y := (cast(int)client_size[1] - buf_h) / 2
-		spl.display_pixels(&window, canvas, {{off_x, off_y}, {buf_w, buf_h}})
-
 		sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
-	}
-}
 
-get_buffer_scale :: proc(client_w, client_h: i32) -> int {
-	scale := 1
-	for {
-		scale += 1
-		if BUFFER_W * scale > cast(int)client_w || BUFFER_H * scale > cast(int)client_h {
-			scale -= 1
-			break
-		}
+		spl.send_user_event(&window, {data = &canvas})
 	}
-
-	return scale
 }
 
 can_move :: proc(pos: [2]int, d: Direction) -> bool {
@@ -2451,6 +2433,19 @@ load_resources :: proc() {
 	logo = load_texture(#load("../res/logo.png"))
 }
 
+get_buffer_scale :: proc(client_w, client_h: i32) -> int {
+	scale := 1
+	for {
+		scale += 1
+		if BUFFER_W * scale > cast(int)client_w || BUFFER_H * scale > cast(int)client_h {
+			scale -= 1
+			break
+		}
+	}
+
+	return scale
+}
+
 _main :: proc(allocator: runtime.Allocator) {
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
@@ -2558,6 +2553,14 @@ _main :: proc(allocator: runtime.Allocator) {
 		case spl.Mouse_Button_Event:
 		case spl.Mouse_Move_Event:
 		case spl.Mouse_Wheel_Event:
+		case spl.User_Event:
+			canvas := (cast(^spl.Texture2D)ev.data)^
+			client_size := get_from_i64(&global_state.client_size)
+			scale := get_buffer_scale(client_size[0], client_size[1])
+			buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
+			off_x := (cast(int)client_size[0] - buf_w) / 2
+			off_y := (cast(int)client_size[1] - buf_h) / 2
+			spl.display_pixels(&window, canvas, {{off_x, off_y}, {buf_w, buf_h}})
 		}
 	}
 

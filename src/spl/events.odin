@@ -8,7 +8,9 @@ Focus_Event :: struct {
 	focused: bool,
 }
 
-Draw_Event :: struct {}
+Draw_Event :: struct {
+	region: Rect,
+}
 
 Resize_Type :: enum {
 	Default,
@@ -56,6 +58,10 @@ Mouse_Wheel_Event :: struct {
 	delta: i16,
 }
 
+User_Event :: struct {
+	data: rawptr,
+}
+
 Event :: union {
 	Close_Event,
 	Focus_Event,
@@ -67,4 +73,5 @@ Event :: union {
 	Mouse_Button_Event,
 	Mouse_Move_Event,
 	Mouse_Wheel_Event,
+	User_Event,
 }

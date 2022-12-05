@@ -60,6 +60,8 @@ destroy :: #force_inline proc(window: ^Window) { _destroy(window) }
 
 next_event :: #force_inline proc(window: ^Window) -> Event { return _next_event(window) }
 
+send_user_event :: #force_inline proc(window: ^Window, ev: User_Event) { _send_user_event(window, ev) }
+
 get_working_area :: #force_inline proc() -> Rect { return _get_working_area() }
 
 move :: #force_inline proc(window: ^Window, pos: [2]int) { _move(window, pos) }

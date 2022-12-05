@@ -5,6 +5,10 @@ import "core:fmt"
 import "core:runtime"
 import win32 "core:sys/windows"
 
+_send_user_event :: proc(window: ^Window, ev: User_Event) {
+	win32.SendMessageW(window.id, win32.WM_APP, uintptr(ev.data), 0)
+}
+
 _next_event :: proc(window: ^Window) -> Event {
 	win32.SwitchToFiber(window.message_fiber)
 	return window.last_event
@@ -146,7 +150,10 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 		if win32.GetUpdateRect(winid, &winrect, false) {
 			win32.ValidateRect(winid, nil)
 		}
-		ev = Draw_Event{}
+		ev = Draw_Event{{
+			{int(winrect.left), int(winrect.top)},
+			{int(winrect.right) - int(winrect.left), int(winrect.bottom) - int(winrect.top)},
+		}}
 	case win32.WM_CHAR:
 		ev = Character_Event{
 			character = cast(rune)wparam,
@@ -251,15 +258,21 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 	case win32.WM_CLOSE:
 		window.must_close = true
 		ev = Close_Event{}
+	case win32.WM_APP:
+		ev = User_Event{data = rawptr(wparam)}
 	}
 
 	if ev != nil {
 		window.last_event = ev
 		win32.SwitchToFiber(window.main_fiber)
-	}
-
-	if _, ok := ev.(Close_Event); ok && !window.must_close {
-		return 0
+		#partial switch in ev {
+		case Close_Event:
+			if !window.must_close {
+				return 0
+			}
+		case User_Event:
+			return 1
+		}
 	}
 
 	return win32.DefWindowProcW(winid, msg, wparam, lparam)
