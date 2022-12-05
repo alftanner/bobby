@@ -1288,14 +1288,14 @@ render :: proc(t: ^thread.Thread) {
 		sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
 		if settings.vsync {
+			spl.send_user_event(&window, {data = &canvas})
 			spl.wait_vblank()
+			sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 		} else {
 			spl.wait_timer(&timer)
+			sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
+			spl.send_user_event(&window, {data = &canvas})
 		}
-
-		sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
-
-		spl.send_user_event(&window, {data = &canvas})
 	}
 }
 
