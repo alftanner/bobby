@@ -20,6 +20,11 @@ import "core:encoding/json"
 
 import spl "spl"
 
+GL :: true
+when GL {
+	import gl "spl/gl"
+}
+
 GAME_TITLE :: "Bobby Carrot Remastered"
 TIMER_FAIL :: "Failed to create a timer. I would use sleep() instead, but @mmozeiko said that sleeping is bad."
 
@@ -870,6 +875,13 @@ render :: proc(t: ^thread.Thread) {
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
 
+	when GL {
+		gl.enable_opengl(&window)
+
+		canvas_handle: u32
+		gl.GenTextures(1, &canvas_handle)
+	}
+
 	timer: spl.Timer
 	if !settings.vsync {
 		ok := spl.create_timer(&timer, settings.fps)
@@ -1285,16 +1297,87 @@ render :: proc(t: ^thread.Thread) {
 			small_array.push_back(&canvas_cache, draw_stats(&canvas))
 		}
 
+		when GL {
+			gl.ClearColor(0, 0, 0, 1)
+			gl.Clear(gl.COLOR_BUFFER_BIT)
+
+			client_size := get_from_i64(&global_state.client_size)
+			scale := get_buffer_scale(client_size[0], client_size[1])
+			buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
+			off_x := (cast(int)client_size[0] - buf_w) / 2
+			off_y := (cast(int)client_size[1] - buf_h) / 2
+
+			gl.Viewport(i32(off_x), i32(off_y), i32(buf_w), i32(buf_h))
+			//gl.Viewport(0, 0, client_size[0], client_size[1])
+
+			gl.BindTexture(gl.TEXTURE_2D, canvas_handle)
+			gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, i32(canvas.size[0]), i32(canvas.size[1]), 0, gl.BGRA_EXT, gl.UNSIGNED_BYTE, raw_data(canvas.pixels))
+
+			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+			//gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP)
+			//gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP)
+
+			gl.TexEnvi(gl.TEXTURE_ENV, gl.TEXTURE_ENV_MODE, gl.MODULATE)
+			gl.Enable(gl.TEXTURE_2D)
+
+			gl.MatrixMode(gl.TEXTURE)
+			gl.LoadIdentity()
+
+			gl.MatrixMode(gl.MODELVIEW)
+			gl.LoadIdentity()
+
+			gl.MatrixMode(gl.PROJECTION)
+			gl.LoadIdentity()
+
+			{
+				gl.Begin(gl.TRIANGLES)
+				defer gl.End()
+
+				p: f32 = 1
+
+				// lower triangle
+				gl.TexCoord2f(0, 1)
+				gl.Vertex2f(-p, -p)
+
+				gl.TexCoord2f(1, 1)
+				gl.Vertex2f(p, -p)
+
+				gl.TexCoord2f(1, 0)
+				gl.Vertex2f(p, p)
+
+				// upper triangle
+				gl.TexCoord2f(0, 1)
+				gl.Vertex2f(-p, -p)
+
+				gl.TexCoord2f(1, 0)
+				gl.Vertex2f(p, p)
+
+				gl.TexCoord2f(0, 0)
+				gl.Vertex2f(-p, p)
+			}
+		}
+
 		sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
-		if settings.vsync {
-			spl.send_user_event(&window, {data = &canvas})
-			spl.wait_vblank()
+		when GL {
+			if settings.vsync {
+				spl.wait_vblank()
+			} else {
+				spl.wait_timer(&timer)
+			}
+			gl.Flush()
 			sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 		} else {
-			spl.wait_timer(&timer)
-			sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
-			spl.send_user_event(&window, {data = &canvas})
+			if settings.vsync {
+				spl.send_user_event(&window, {data = &canvas})
+				spl.wait_vblank()
+				sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
+			} else {
+				spl.wait_timer(&timer)
+				sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
+				spl.send_user_event(&window, {data = &canvas})
+			}
 		}
 	}
 }
@@ -2508,6 +2591,9 @@ _main :: proc(allocator: runtime.Allocator) {
 	defer {
 		thread.terminate(render_thread, 0)
 		thread.destroy(render_thread)
+		when GL {
+			gl.disable_opengl(&window)
+		}
 	}
 
 	for !window.must_close {

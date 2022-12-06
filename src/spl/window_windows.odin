@@ -6,6 +6,7 @@ import win32 "core:sys/windows"
 
 Window_OS_Specific :: struct {
 	id: win32.HWND,
+	rc: win32.HGLRC,
 	icon: win32.HICON,
 	main_fiber, message_fiber: rawptr,
 	last_event: Event,
@@ -14,7 +15,7 @@ Window_OS_Specific :: struct {
 // need to store pointer to the window for _default_window_proc
 @private window_handle: ^Window
 
-_create :: proc "contextless" (window: ^Window, pos: [2]int, size: [2]int, title: string, flags: Window_Flags) -> bool {
+_create :: proc(window: ^Window, pos: [2]int, size: [2]int, title: string, flags: Window_Flags) -> bool {
 	if window_handle != nil {
 		return false
 	}
@@ -159,6 +160,9 @@ _set_resizable :: proc(window: ^Window, resizable: bool) {
 }
 
 _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect) {
+	dc := win32.GetDC(window.id)
+	defer win32.ReleaseDC(window.id, dc)
+
 	bitmap_info: win32.BITMAPINFO = {
 		bmiHeader = {
 			biSize = size_of(win32.BITMAPINFOHEADER),
@@ -169,9 +173,6 @@ _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect) {
 			biHeight = -cast(i32)canvas.size[1],
 		},
 	}
-
-	dc := win32.GetDC(window.id)
-	defer win32.ReleaseDC(window.id, dc)
 
 	win32.SelectObject(dc, win32.GetStockObject(win32.DC_BRUSH))
 	win32.SetDCBrushColor(dc, win32.RGB(expand_to_tuple(window.clear_color)))
