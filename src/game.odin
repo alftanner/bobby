@@ -66,13 +66,13 @@ WINDOW_W :: BUFFER_W * DEFAULT_SCALE
 WINDOW_H :: BUFFER_H * DEFAULT_SCALE
 
 Font :: struct {
-	using texture: spl.Texture2D,
+	using texture: Texture2D,
 	table: map[rune][2]int,
 	glyph_size: [2]int,
 }
 general_font: Font
 hud_font: Font
-atlas, splashes, logo: spl.Texture2D
+atlas, splashes, logo: Texture2D
 
 Direction :: enum {
 	None,
@@ -82,7 +82,7 @@ Direction :: enum {
 	Up,
 }
 
-Sprite :: spl.Rect
+Sprite :: Rect
 
 Sprite_Offset :: struct {
 	using sprite: Sprite,
@@ -90,7 +90,7 @@ Sprite_Offset :: struct {
 }
 
 Text_Label :: struct {
-	using rect: spl.Rect,
+	using rect: Rect,
 	text_buf: [64]byte,
 	text_len: int,
 }
@@ -106,7 +106,7 @@ Menu_Option :: struct {
 }
 
 // max redraw regions
-Region_Cache :: small_array.Small_Array(512, spl.Rect)
+Region_Cache :: small_array.Small_Array(512, Rect)
 // max tiles changed in an update
 Tile_Queue :: small_array.Small_Array(256, int)
 
@@ -503,14 +503,14 @@ cycles_lap_time :: proc(prev: ^u64) -> u64 {
 }
 
 measure_or_draw_text :: proc(
-	t: ^spl.Texture2D,
+	t: ^Texture2D,
 	font: Font,
 	text: string,
 	pos: [2]int,
 	color: image.RGB_Pixel,
 	shadow_color: image.RGB_Pixel,
 	no_draw := false,
-) -> (region: spl.Rect) {
+) -> (region: Rect) {
 	pos := pos
 	region.x = pos.x
 	region.y = pos.y
@@ -524,8 +524,8 @@ measure_or_draw_text :: proc(
 
 		glyph_pos := font.table[ch] or_else font.table['?']
 		if !no_draw {
-			spl.draw_from_texture(t, font.texture, pos + 1, {glyph_pos, font.glyph_size}, .None, shadow_color)
-			spl.draw_from_texture(t, font.texture, pos, {glyph_pos, font.glyph_size}, .None, color)
+			draw_from_texture(t, font.texture, pos + 1, {glyph_pos, font.glyph_size}, .None, shadow_color)
+			draw_from_texture(t, font.texture, pos, {glyph_pos, font.glyph_size}, .None, color)
 		}
 
 		pos.x += font.glyph_size[0] + 1
@@ -537,13 +537,13 @@ measure_or_draw_text :: proc(
 }
 
 draw_text :: #force_inline proc(
-	t: ^spl.Texture2D,
+	t: ^Texture2D,
 	font: Font,
 	text: string,
 	pos: [2]int,
 	color: image.RGB_Pixel = {255, 255, 255},
 	shadow_color: image.RGB_Pixel = {0, 0, 0},
-) -> (region: spl.Rect) {
+) -> (region: Rect) {
 	return measure_or_draw_text(t, font, text, pos, color, shadow_color)
 }
 
@@ -552,7 +552,7 @@ measure_text :: #force_inline proc(font: Font, text: string) -> [2]int {
 	return region.size
 }
 
-draw_stats :: proc(t: ^spl.Texture2D) -> spl.Rect {
+draw_stats :: proc(t: ^Texture2D) -> Rect {
 	@thread_local time_waited: time.Duration
 	@thread_local lastu, lastf, fps, tps: Average_Calculator
 
@@ -630,7 +630,7 @@ get_intro_alpha :: proc(intro: Animation, frame_delta: f32) -> u8 {
 	return alpha
 }
 
-draw_credits :: proc(t: ^spl.Texture2D, language: Language) {
+draw_credits :: proc(t: ^Texture2D, language: Language) {
 	str := language_strings[language][.Credits_Original]
 	str2 := language_strings[language][.Credits_Remastered]
 
@@ -641,7 +641,7 @@ draw_credits :: proc(t: ^spl.Texture2D, language: Language) {
 
 	draw_text(t, general_font, str, {(t.size[0] - str_size[0]) / 2, off_y})
 	off_y += str_size[1] + general_font.glyph_size[1]
-	spl.draw_from_texture(t, logo, {(t.size[0] - logo.size[0]) / 2, off_y}, {{}, logo.size})
+	draw_from_texture(t, logo, {(t.size[0] - logo.size[0]) / 2, off_y}, {{}, logo.size})
 	off_y += logo.size[1] + general_font.glyph_size[1]
 	draw_text(t, general_font, str2, {(t.size[0] - str2_size[0]) / 2, off_y})
 }
@@ -751,11 +751,11 @@ get_sprite_from_pos :: proc(pos: [2]int, level: Level) -> Sprite {
 	return sprite
 }
 /*
-is_inside_rect :: #force_inline proc(p: [2]int, r: spl.Rect) -> bool {
+is_inside_rect :: #force_inline proc(p: [2]int, r: Rect) -> bool {
 	return p.x >= r.x && p.x < r.x + r.size[0] && p.y >= r.y && p.y < r.y + r.size[1]
 }
 
-rect_intersection :: proc(r1, r2: spl.Rect) -> spl.Rect {
+rect_intersection :: proc(r1, r2: Rect) -> Rect {
 	pos: [2]int = {max(r1.x, r2.x), max(r1.y, r2.y)}
 	right_x := min(r1.x + r1.size[0], r2.x + r2.size[0])
 	bottom_y := min(r1.y + r1.size[1], r2.y + r2.size[1])
@@ -766,7 +766,7 @@ rect_intersection :: proc(r1, r2: spl.Rect) -> spl.Rect {
 	return {}
 }
 */
-draw_scoreboard :: proc(t: ^spl.Texture2D, q: ^Region_Cache, labels: []Text_Label, page: int) {
+draw_scoreboard :: proc(t: ^Texture2D, q: ^Region_Cache, labels: []Text_Label, page: int) {
 	if len(labels) == 0 do return
 
 	DISABLED :: image.RGB_Pixel{75, 75, 75}
@@ -782,7 +782,7 @@ draw_scoreboard :: proc(t: ^spl.Texture2D, q: ^Region_Cache, labels: []Text_Labe
 	page_h := general_font.glyph_size[1] * 19
 	y := (BUFFER_H - page_h) / 2
 
-	up_arrow, down_arrow: spl.Rect
+	up_arrow, down_arrow: Rect
 	up_arrow.size = UP_ARROW.size
 	down_arrow.size = UP_ARROW.size
 
@@ -809,7 +809,7 @@ draw_scoreboard :: proc(t: ^spl.Texture2D, q: ^Region_Cache, labels: []Text_Labe
 		if page == 0 {
 			color = DISABLED
 		}
-		spl.draw_from_texture(t, atlas, up_arrow.pos, UP_ARROW, .None, color)
+		draw_from_texture(t, atlas, up_arrow.pos, UP_ARROW, .None, color)
 		small_array.push_back(q, up_arrow)
 	}
 	{
@@ -817,12 +817,12 @@ draw_scoreboard :: proc(t: ^spl.Texture2D, q: ^Region_Cache, labels: []Text_Labe
 		if page == pages - 1 {
 			color = DISABLED
 		}
-		spl.draw_from_texture(t, atlas, down_arrow.pos, UP_ARROW, .Vertical, color)
+		draw_from_texture(t, atlas, down_arrow.pos, UP_ARROW, .Vertical, color)
 		small_array.push_back(q, down_arrow)
 	}
 }
 
-draw_menu :: proc(t: ^spl.Texture2D, q: ^Region_Cache, options: []Menu_Option, selected: int) {
+draw_menu :: proc(t: ^Texture2D, q: ^Region_Cache, options: []Menu_Option, selected: int) {
 	DISABLED :: image.RGB_Pixel{75, 75, 75}
 	NORMAL :: image.RGB_Pixel{145, 145, 145}
 	SELECTED :: image.RGB_Pixel{255, 255, 255}
@@ -843,7 +843,7 @@ draw_menu :: proc(t: ^spl.Texture2D, q: ^Region_Cache, options: []Menu_Option, s
 			if !option.arrows.?[0].enabled {
 				color = DISABLED
 			}
-			spl.draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .Horizontal, color)
+			draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .Horizontal, color)
 			x += RIGHT_ARROW.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT
 			region.size[0] += (RIGHT_ARROW.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT) * 2
 			region.y -= 1
@@ -858,23 +858,23 @@ draw_menu :: proc(t: ^spl.Texture2D, q: ^Region_Cache, options: []Menu_Option, s
 				color = DISABLED
 			}
 			x += option.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT
-			spl.draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .None, color)
+			draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .None, color)
 		}
 
 		small_array.push_back(q, region)
 	}
 }
 
-load_texture :: proc(data: []byte) -> (t: spl.Texture2D) {
+load_texture :: proc(data: []byte) -> (t: Texture2D) {
 	img, err := image.load(data)
 	assert(err == nil, fmt.tprint(err))
 	defer image.destroy(img)
 
-	t = spl.texture_make(img.width, img.height)
+	t = texture_make(img.width, img.height)
 
 	pixels := mem.slice_data_cast([]image.RGBA_Pixel, bytes.buffer_to_bytes(&img.pixels))
 	for p, i in pixels {
-		t.pixels[i] = spl.color(p)
+		t.pixels[i] = color(p)
 	}
 
 	return
@@ -976,21 +976,21 @@ render :: proc(t: ^thread.Thread) {
 	tick_time: f32
 	diff, offset: [2]f32
 
-	canvas, scene_texture: spl.Texture2D
+	canvas, scene_texture: Texture2D
 	canvas_cache, canvas_cache_slow: Region_Cache
 
-	backgrounds: [Campaign]spl.Texture2D
+	backgrounds: [Campaign]Texture2D
 	tiles_updated: Tile_Queue
 
-	canvas = spl.texture_make(BUFFER_W, BUFFER_H)
-	scene_texture = spl.texture_make(BUFFER_W, BUFFER_H)
+	canvas = texture_make(BUFFER_W, BUFFER_H)
+	scene_texture = texture_make(BUFFER_W, BUFFER_H)
 	for bg, c in &backgrounds {
-		bg = spl.texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
+		bg = texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
 
 		sprite := sprites[.Grass if c == .Carrot_Harvest else .Ground]
 		for y in 0..=TILES_H do for x in 0..=TILES_W {
 			pos: [2]int = {x, y}
-			spl.draw_from_texture(&bg, atlas, pos * TILE_SIZE, sprite)
+			draw_from_texture(&bg, atlas, pos * TILE_SIZE, sprite)
 		}
 	}
 
@@ -1118,11 +1118,11 @@ render :: proc(t: ^thread.Thread) {
 					pos: [2]int = {tile_idx%level.size[0], tile_idx/level.size[0]}
 					sprite := get_sprite_from_pos(pos, level)
 
-					region: spl.Rect
+					region: Rect
 					region.pos = (pos * TILE_SIZE) + lvl_offset
 					region.size = {TILE_SIZE, TILE_SIZE}
 
-					spl.draw_from_texture(&scene_texture, atlas, region.pos, sprite)
+					draw_from_texture(&scene_texture, atlas, region.pos, sprite)
 					small_array.push_back(&canvas_cache, region)
 				}
 			} else {
@@ -1144,41 +1144,41 @@ render :: proc(t: ^thread.Thread) {
 				lvl_offset.y = int(offset.y * TILE_SIZE)
 
 				if draw_world_background { // TODO: only draw needed parts, not the entire thing
-					bg_rect: spl.Rect
+					bg_rect: Rect
 					bg_rect.pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
 					bg_rect.pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
 					bg_rect.size = backgrounds[.Carrot_Harvest].size - bg_rect.pos
-					spl.draw_from_texture(&scene_texture, backgrounds[.Carrot_Harvest], {}, bg_rect)
+					draw_from_texture(&scene_texture, backgrounds[.Carrot_Harvest], {}, bg_rect)
 				}
 				for _, idx in level.tiles {
 					pos: [2]int = {idx%level.size[0], idx/level.size[0]}
 					sprite := get_sprite_from_pos(pos, level)
-					spl.draw_from_texture(&scene_texture, atlas, (pos * TILE_SIZE) + lvl_offset, sprite)
+					draw_from_texture(&scene_texture, atlas, (pos * TILE_SIZE) + lvl_offset, sprite)
 				}
 			case .Pause_Menu, .Main_Menu, .Scoreboard:
 				texture := backgrounds[campaign]
 				if scene == .Pause_Menu {
 					texture = canvas
 				}
-				spl.draw_from_texture(&scene_texture, texture, {}, {{}, scene_texture.size})
-				spl.draw_rect(&scene_texture, {{}, scene_texture.size}, {0, 0, 0, 0xAA})
+				draw_from_texture(&scene_texture, texture, {}, {{}, scene_texture.size})
+				draw_rect(&scene_texture, {{}, scene_texture.size}, {0, 0, 0, 0xAA})
 			case .Intro:
-				slice.fill(scene_texture.pixels, spl.BLACK)
+				slice.fill(scene_texture.pixels, BLACK)
 
 				off := (scene_texture.size - INTRO_SPLASH.size) / 2
-				spl.draw_from_texture(&scene_texture, splashes, off, INTRO_SPLASH)
-				spl.draw_rect(&scene_texture, {off, INTRO_SPLASH.size}, {0, 0, 0, intro_alpha})
+				draw_from_texture(&scene_texture, splashes, off, INTRO_SPLASH)
+				draw_rect(&scene_texture, {off, INTRO_SPLASH.size}, {0, 0, 0, intro_alpha})
 			case .End:
-				slice.fill(scene_texture.pixels, spl.BLACK)
+				slice.fill(scene_texture.pixels, BLACK)
 
 				off := (scene_texture.size - END_SPLASH.size) / 2
-				spl.draw_from_texture(&scene_texture, splashes, off, END_SPLASH)
+				draw_from_texture(&scene_texture, splashes, off, END_SPLASH)
 			case .Credits:
-				slice.fill(scene_texture.pixels, spl.BLACK)
+				slice.fill(scene_texture.pixels, BLACK)
 
 				draw_credits(&scene_texture, language)
 			case .None:
-				slice.fill(scene_texture.pixels, spl.BLACK)
+				slice.fill(scene_texture.pixels, BLACK)
 			}
 
 			canvas_redraw = true
@@ -1187,16 +1187,16 @@ render :: proc(t: ^thread.Thread) {
 		if canvas_redraw {
 			small_array.clear(&canvas_cache)
 			small_array.clear(&canvas_cache_slow)
-			spl.draw_from_texture(&canvas, scene_texture, {}, {{}, scene_texture.size})
+			draw_from_texture(&canvas, scene_texture, {}, {{}, scene_texture.size})
 		} else { // cached rendering
 			for cache_region in small_array.pop_back_safe(&canvas_cache) {
-				spl.draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
+				draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
 			}
 		}
 
 		if canvas_redraw || cache_slow_redraw {
 			for cache_region in small_array.pop_back_safe(&canvas_cache_slow) {
-				spl.draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
+				draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
 			}
 
 			// slow cached drawing
@@ -1215,8 +1215,8 @@ render :: proc(t: ^thread.Thread) {
 				pos := (player_pos + offset) * TILE_SIZE
 				px := int(pos.x) + player.sprite.offset.x
 				py := int(pos.y) + player.sprite.offset.y
-				spl.draw_from_texture(&canvas, atlas, {px, py}, player.sprite)
-				small_array.push_back(&canvas_cache, spl.Rect{{px, py}, player.sprite.size})
+				draw_from_texture(&canvas, atlas, {px, py}, player.sprite)
+				small_array.push_back(&canvas_cache, Rect{{px, py}, player.sprite.size})
 			}
 
 			// HUD
@@ -1242,8 +1242,8 @@ render :: proc(t: ^thread.Thread) {
 					if level.carrots > 0 {
 						sprite := hud_sprites[.Carrot]
 						pos.x -= sprite.size[0]
-						spl.draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, spl.Rect{pos, sprite.size})
+						draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, Rect{pos, sprite.size})
 						pos.x -= 2
 
 						tbuf: [8]byte
@@ -1260,8 +1260,8 @@ render :: proc(t: ^thread.Thread) {
 					if level.eggs > 0 {
 						sprite := hud_sprites[.Egg]
 						pos.x -= sprite.size[0]
-						spl.draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, spl.Rect{pos, sprite.size})
+						draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, Rect{pos, sprite.size})
 						pos.x -= 2
 
 						tbuf: [8]byte
@@ -1278,22 +1278,22 @@ render :: proc(t: ^thread.Thread) {
 					if player.silver_key {
 						sprite := hud_sprites[.Silver_Key]
 						pos.x -= sprite.size[0]
-						spl.draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, spl.Rect{pos, sprite.size})
+						draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, Rect{pos, sprite.size})
 						pos.x -= 2
 					}
 					if player.golden_key {
 						sprite := hud_sprites[.Golden_Key]
 						pos.x -= sprite.size[0]
-						spl.draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, spl.Rect{pos, sprite.size})
+						draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, Rect{pos, sprite.size})
 						pos.x -= 2
 					}
 					if player.copper_key {
 						sprite := hud_sprites[.Copper_Key]
 						pos.x -= sprite.size[0]
-						spl.draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, spl.Rect{pos, sprite.size})
+						draw_from_texture(&canvas, atlas, pos, sprite)
+						small_array.push_back(&canvas_cache, Rect{pos, sprite.size})
 						pos.x -= 2
 					}
 				}
@@ -1342,8 +1342,8 @@ render :: proc(t: ^thread.Thread) {
 				pos: [2]int
 				pos.x = (canvas.size[0] - success.size[0]) / 2
 				pos.y = (canvas.size[1] - total_h) / 2
-				spl.draw_from_texture(&canvas, atlas, pos, success)
-				small_array.push_back(&canvas_cache, spl.Rect{pos, success.size})
+				draw_from_texture(&canvas, atlas, pos, success)
+				small_array.push_back(&canvas_cache, Rect{pos, success.size})
 				pos.y += success.size[1] + (general_font.glyph_size[1] * 2)
 
 				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, time_str, {time_x, pos.y}))
@@ -1358,10 +1358,10 @@ render :: proc(t: ^thread.Thread) {
 
 		fade_alpha := get_fade_alpha(fade, frame_delta)
 		if fade_alpha != 0 {
-			spl.draw_rect(&canvas, {{}, canvas.size}, {0, 0, 0, fade_alpha})
+			draw_rect(&canvas, {{}, canvas.size}, {0, 0, 0, fade_alpha})
 			small_array.clear(&canvas_cache_slow)
 			small_array.clear(&canvas_cache)
-			small_array.push_back(&canvas_cache, spl.Rect{{}, canvas.size})
+			small_array.push_back(&canvas_cache, Rect{{}, canvas.size})
 		}
 
 		if settings.show_stats {
@@ -2556,13 +2556,13 @@ _main :: proc(allocator: runtime.Allocator) {
 		case spl.Mouse_Move_Event:
 		case spl.Mouse_Wheel_Event:
 		case spl.User_Event:
-			canvas := (cast(^spl.Texture2D)ev.data)^
+			canvas := (cast(^Texture2D)ev.data)^
 			client_size := get_from_i64(&global_state.client_size)
 			scale := get_buffer_scale(client_size[0], client_size[1])
 			buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
 			off_x := (cast(int)client_size[0] - buf_w) / 2
 			off_y := (cast(int)client_size[1] - buf_h) / 2
-			spl.display_pixels(&window, canvas, {{off_x, off_y}, {buf_w, buf_h}})
+			spl.display_pixels(&window, canvas.pixels, canvas.size, {{off_x, off_y}, {buf_w, buf_h}})
 		}
 	}
 

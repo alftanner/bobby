@@ -159,7 +159,7 @@ _set_resizable :: proc(window: ^Window, resizable: bool) {
 	win32.SetWindowLongPtrW(winid, win32.GWL_STYLE, cast(int)style)
 }
 
-_display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect) {
+_display_pixels :: proc(window: ^Window, pixels: [][4]u8, pixels_size: [2]int, dest: Rect) {
 	dc := win32.GetDC(window.id)
 	defer win32.ReleaseDC(window.id, dc)
 
@@ -169,8 +169,8 @@ _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect) {
 			biPlanes = 1,
 			biBitCount = 32,
 			biCompression = win32.BI_RGB,
-			biWidth = cast(i32)canvas.size[0],
-			biHeight = -cast(i32)canvas.size[1],
+			biWidth = cast(i32)pixels_size[0],
+			biHeight = -cast(i32)pixels_size[1],
 		},
 	}
 
@@ -195,7 +195,7 @@ _display_pixels :: proc(window: ^Window, canvas: Texture2D, dest: Rect) {
 	win32.StretchDIBits(
 		dc,
 		cast(i32)dest.x, cast(i32)dest.y, cast(i32)dest.size[0], cast(i32)dest.size[1],
-		0, 0, cast(i32)canvas.size[0], cast(i32)canvas.size[1], raw_data(canvas.pixels),
+		0, 0, cast(i32)pixels_size[0], cast(i32)pixels_size[1], raw_data(pixels),
 		&bitmap_info, win32.DIB_RGB_COLORS, win32.SRCCOPY,
 	)
 }

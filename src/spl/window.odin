@@ -27,6 +27,11 @@ Window_Mode :: enum {
 	Resizing,
 }
 
+Rect :: struct {
+	using pos: [2]int,
+	size: [2]int,
+}
+
 Window :: struct {
 	// can modify
 	must_close: bool,
@@ -75,7 +80,7 @@ set_min_size :: #force_inline proc(window: ^Window, size: [2]int) {
 	_resize(window, window.client.size)
 }
 
-display_pixels :: #force_inline proc(window: ^Window, canvas: Texture2D, dest: Rect) { _display_pixels(window, canvas, dest) }
+display_pixels :: #force_inline proc(window: ^Window, pixels: [][4]u8, pixels_size: [2]int, dest: Rect) { _display_pixels(window, pixels, pixels_size, dest) }
 
 // TODO: bug
 //wait_vblank :: _wait_vblank

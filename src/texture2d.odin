@@ -1,7 +1,9 @@
-package spl
+package main
 
 import "core:mem"
 import "core:image"
+
+import "spl"
 
 WHITE  := color({255, 255, 255, 255})
 BLACK  := color({0,   0,   0,   255})
@@ -18,10 +20,7 @@ Flip :: enum {
 	Both,
 }
 
-Rect :: struct {
-	using pos: [2]int,
-	size: [2]int,
-}
+Rect :: spl.Rect
 
 Color :: [4]u8
 
