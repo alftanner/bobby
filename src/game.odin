@@ -20,11 +20,6 @@ import "core:encoding/json"
 
 import spl "spl"
 
-GL :: true
-when GL {
-	import gl "spl/gl"
-}
-
 GAME_TITLE :: "Bobby Carrot Remastered"
 TIMER_FAIL :: "Failed to create a timer. I would use sleep() instead, but @mmozeiko said that sleeping is bad."
 
@@ -206,6 +201,7 @@ State :: struct {
 	frame_work, frame_time: time.Duration,
 	tick_work, tick_time: time.Duration,
 	previous_tick: time.Tick,
+	loaded_resources: bool,
 
 	keyboard: Keyboard_State,
 }
@@ -635,8 +631,6 @@ get_intro_alpha :: proc(intro: Animation, frame_delta: f32) -> u8 {
 }
 
 draw_credits :: proc(t: ^spl.Texture2D, language: Language) {
-	slice.fill(t.pixels, spl.BLACK)
-
 	str := language_strings[language][.Credits_Original]
 	str2 := language_strings[language][.Credits_Remastered]
 
@@ -871,16 +865,90 @@ draw_menu :: proc(t: ^spl.Texture2D, q: ^Region_Cache, options: []Menu_Option, s
 	}
 }
 
+load_texture :: proc(data: []byte) -> (t: spl.Texture2D) {
+	img, err := image.load(data)
+	assert(err == nil, fmt.tprint(err))
+	defer image.destroy(img)
+
+	t = spl.texture_make(img.width, img.height)
+
+	pixels := mem.slice_data_cast([]image.RGBA_Pixel, bytes.buffer_to_bytes(&img.pixels))
+	for p, i in pixels {
+		t.pixels[i] = spl.color(p)
+	}
+
+	return
+}
+
+load_resources :: proc() {
+	general_font.texture = load_texture(#load("../res/font.png"))
+	general_font.glyph_size = {5, 7}
+	general_font.table = make(map[rune][2]int)
+	for ch in ` 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ?'".,:;~!@#$^&_|\/%*+-=<>()[]{}` {
+		glyph_idx := len(general_font.table)
+		gx := (glyph_idx % (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[0]
+		gy := (glyph_idx / (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[1]
+		general_font.table[ch] = {gx, gy}
+	}
+	when SUPPORT_LANGUAGES {
+		for ch in `бБвВгГґҐдДєЄжЖзЗиИїЇйЙкКлЛмнпПтуУфФцЦчЧшШщЩьЬюЮяЯ` {
+			glyph_idx := len(general_font.table)
+			gx := (glyph_idx % (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[0]
+			gy := (glyph_idx / (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[1]
+			general_font.table[ch] = {gx, gy}
+		}
+		// Cyrillic from Latin equivalents
+		general_font.table['а'] = general_font.table['a']
+		general_font.table['А'] = general_font.table['A']
+		general_font.table['е'] = general_font.table['e']
+		general_font.table['Е'] = general_font.table['E']
+		general_font.table['і'] = general_font.table['i']
+		general_font.table['І'] = general_font.table['I']
+		general_font.table['о'] = general_font.table['o']
+		general_font.table['О'] = general_font.table['O']
+		general_font.table['с'] = general_font.table['c']
+		general_font.table['С'] = general_font.table['C']
+		general_font.table['р'] = general_font.table['p']
+		general_font.table['Р'] = general_font.table['P']
+		general_font.table['х'] = general_font.table['x']
+		general_font.table['Х'] = general_font.table['X']
+
+		// partial equivalents
+		general_font.table['М'] = general_font.table['M']
+		general_font.table['Н'] = general_font.table['H']
+		general_font.table['Т'] = general_font.table['T']
+	}
+
+	atlas = load_texture(#load("../res/atlas.png"))
+
+	hud_font.texture = atlas
+	hud_font.glyph_size = {5, 8}
+	hud_font.table = make(map[rune][2]int)
+	for ch in `0123456789:?` {
+		OFFSET: [2]int : {128, 106}
+		glyph_idx := len(hud_font.table)
+		gx := OFFSET.x + (glyph_idx * hud_font.glyph_size[0])
+		gy := OFFSET.y
+		hud_font.table[ch] = {gx, gy}
+	}
+
+	ATLAS_TILES_W :: 12
+	for s in Sprites {
+		idx := int(s)
+		pos: [2]int = {idx%ATLAS_TILES_W, idx/ATLAS_TILES_W}
+		sprites[s] = {pos * TILE_SIZE, {TILE_SIZE, TILE_SIZE}}
+	}
+
+	splashes = load_texture(#load("../res/splashes.png"))
+	logo = load_texture(#load("../res/logo.png"))
+}
+
 render :: proc(t: ^thread.Thread) {
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
 
-	when GL {
-		gl.enable_opengl(&window)
-
-		canvas_handle: u32
-		gl.GenTextures(1, &canvas_handle)
-	}
+	load_resources()
+	sync.atomic_store(&global_state.loaded_resources, true)
 
 	timer: spl.Timer
 	if !settings.vsync {
@@ -918,6 +986,7 @@ render :: proc(t: ^thread.Thread) {
 	scene_texture = spl.texture_make(BUFFER_W, BUFFER_H)
 	for bg, c in &backgrounds {
 		bg = spl.texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
+
 		sprite := sprites[.Grass if c == .Carrot_Harvest else .Ground]
 		for y in 0..=TILES_H do for x in 0..=TILES_W {
 			pos: [2]int = {x, y}
@@ -1092,7 +1161,7 @@ render :: proc(t: ^thread.Thread) {
 					texture = canvas
 				}
 				spl.draw_from_texture(&scene_texture, texture, {}, {{}, scene_texture.size})
-				spl.draw_rect(&scene_texture, {{}, scene_texture.size}, {0, 0, 0, 0xaa})
+				spl.draw_rect(&scene_texture, {{}, scene_texture.size}, {0, 0, 0, 0xAA})
 			case .Intro:
 				slice.fill(scene_texture.pixels, spl.BLACK)
 
@@ -1105,6 +1174,8 @@ render :: proc(t: ^thread.Thread) {
 				off := (scene_texture.size - END_SPLASH.size) / 2
 				spl.draw_from_texture(&scene_texture, splashes, off, END_SPLASH)
 			case .Credits:
+				slice.fill(scene_texture.pixels, spl.BLACK)
+
 				draw_credits(&scene_texture, language)
 			case .None:
 				slice.fill(scene_texture.pixels, spl.BLACK)
@@ -1297,87 +1368,16 @@ render :: proc(t: ^thread.Thread) {
 			small_array.push_back(&canvas_cache, draw_stats(&canvas))
 		}
 
-		when GL {
-			gl.ClearColor(0, 0, 0, 1)
-			gl.Clear(gl.COLOR_BUFFER_BIT)
-
-			client_size := get_from_i64(&global_state.client_size)
-			scale := get_buffer_scale(client_size[0], client_size[1])
-			buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
-			off_x := (cast(int)client_size[0] - buf_w) / 2
-			off_y := (cast(int)client_size[1] - buf_h) / 2
-
-			gl.Viewport(i32(off_x), i32(off_y), i32(buf_w), i32(buf_h))
-			//gl.Viewport(0, 0, client_size[0], client_size[1])
-
-			gl.BindTexture(gl.TEXTURE_2D, canvas_handle)
-			gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, i32(canvas.size[0]), i32(canvas.size[1]), 0, gl.BGRA_EXT, gl.UNSIGNED_BYTE, raw_data(canvas.pixels))
-
-			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-			//gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP)
-			//gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP)
-
-			gl.TexEnvi(gl.TEXTURE_ENV, gl.TEXTURE_ENV_MODE, gl.MODULATE)
-			gl.Enable(gl.TEXTURE_2D)
-
-			gl.MatrixMode(gl.TEXTURE)
-			gl.LoadIdentity()
-
-			gl.MatrixMode(gl.MODELVIEW)
-			gl.LoadIdentity()
-
-			gl.MatrixMode(gl.PROJECTION)
-			gl.LoadIdentity()
-
-			{
-				gl.Begin(gl.TRIANGLES)
-				defer gl.End()
-
-				p: f32 = 1
-
-				// lower triangle
-				gl.TexCoord2f(0, 1)
-				gl.Vertex2f(-p, -p)
-
-				gl.TexCoord2f(1, 1)
-				gl.Vertex2f(p, -p)
-
-				gl.TexCoord2f(1, 0)
-				gl.Vertex2f(p, p)
-
-				// upper triangle
-				gl.TexCoord2f(0, 1)
-				gl.Vertex2f(-p, -p)
-
-				gl.TexCoord2f(1, 0)
-				gl.Vertex2f(p, p)
-
-				gl.TexCoord2f(0, 0)
-				gl.Vertex2f(-p, p)
-			}
-		}
-
 		sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
-		when GL {
-			if settings.vsync {
-				spl.wait_vblank()
-			} else {
-				spl.wait_timer(&timer)
-			}
-			gl.Flush()
+		if settings.vsync {
+			spl.send_user_event(&window, {data = &canvas})
+			spl.wait_vblank()
 			sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 		} else {
-			if settings.vsync {
-				spl.send_user_event(&window, {data = &canvas})
-				spl.wait_vblank()
-				sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
-			} else {
-				spl.wait_timer(&timer)
-				sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
-				spl.send_user_event(&window, {data = &canvas})
-			}
+			spl.wait_timer(&timer)
+			sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
+			spl.send_user_event(&window, {data = &canvas})
 		}
 	}
 }
@@ -2321,6 +2321,14 @@ update_world :: proc(t: ^thread.Thread) {
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
 
+	for !sync.atomic_load(&global_state.loaded_resources) {}
+
+	when ODIN_DEBUG {
+		show_main_menu()
+	} else {
+		show_intro()
+	}
+
 	timer: spl.Timer
 	{
 		ok := spl.create_timer(&timer, TPS)
@@ -2329,12 +2337,6 @@ update_world :: proc(t: ^thread.Thread) {
 		} else {
 			assert(ok, TIMER_FAIL)
 		}
-	}
-
-	when ODIN_DEBUG {
-		show_main_menu()
-	} else {
-		show_intro()
 	}
 
 	for {
@@ -2438,83 +2440,6 @@ update_world :: proc(t: ^thread.Thread) {
 	}
 }
 
-load_texture :: proc(data: []byte) -> (t: spl.Texture2D) {
-	img, err := image.load(data)
-	assert(err == nil, fmt.tprint(err))
-	defer image.destroy(img)
-
-	t = spl.texture_make(img.width, img.height)
-
-	pixels := mem.slice_data_cast([]image.RGBA_Pixel, bytes.buffer_to_bytes(&img.pixels))
-	for p, i in pixels {
-		t.pixels[i] = spl.color(p)
-	}
-	return
-}
-
-load_resources :: proc() {
-	general_font.texture = load_texture(#load("../res/font.png"))
-	general_font.glyph_size = {5, 7}
-	general_font.table = make(map[rune][2]int)
-	for ch in ` 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ?'".,:;~!@#$^&_|\/%*+-=<>()[]{}` {
-		glyph_idx := len(general_font.table)
-		gx := (glyph_idx % (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[0]
-		gy := (glyph_idx / (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[1]
-		general_font.table[ch] = {gx, gy}
-	}
-	when SUPPORT_LANGUAGES {
-		for ch in `бБвВгГґҐдДєЄжЖзЗиИїЇйЙкКлЛмнпПтуУфФцЦчЧшШщЩьЬюЮяЯ` {
-			glyph_idx := len(general_font.table)
-			gx := (glyph_idx % (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[0]
-			gy := (glyph_idx / (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[1]
-			general_font.table[ch] = {gx, gy}
-		}
-		// Cyrillic from Latin equivalents
-		general_font.table['а'] = general_font.table['a']
-		general_font.table['А'] = general_font.table['A']
-		general_font.table['е'] = general_font.table['e']
-		general_font.table['Е'] = general_font.table['E']
-		general_font.table['і'] = general_font.table['i']
-		general_font.table['І'] = general_font.table['I']
-		general_font.table['о'] = general_font.table['o']
-		general_font.table['О'] = general_font.table['O']
-		general_font.table['с'] = general_font.table['c']
-		general_font.table['С'] = general_font.table['C']
-		general_font.table['р'] = general_font.table['p']
-		general_font.table['Р'] = general_font.table['P']
-		general_font.table['х'] = general_font.table['x']
-		general_font.table['Х'] = general_font.table['X']
-
-		// partial equivalents
-		general_font.table['М'] = general_font.table['M']
-		general_font.table['Н'] = general_font.table['H']
-		general_font.table['Т'] = general_font.table['T']
-	}
-
-	atlas = load_texture(#load("../res/atlas.png"))
-
-	hud_font.texture = atlas
-	hud_font.glyph_size = {5, 8}
-	hud_font.table = make(map[rune][2]int)
-	for ch in `0123456789:?` {
-		OFFSET: [2]int : {128, 106}
-		glyph_idx := len(hud_font.table)
-		gx := OFFSET.x + (glyph_idx * hud_font.glyph_size[0])
-		gy := OFFSET.y
-		hud_font.table[ch] = {gx, gy}
-	}
-
-	ATLAS_TILES_W :: 12
-	for s in Sprites {
-		idx := int(s)
-		pos: [2]int = {idx%ATLAS_TILES_W, idx/ATLAS_TILES_W}
-		sprites[s] = {pos * TILE_SIZE, {TILE_SIZE, TILE_SIZE}}
-	}
-
-	splashes = load_texture(#load("../res/splashes.png"))
-	logo = load_texture(#load("../res/logo.png"))
-}
-
 get_buffer_scale :: proc(client_w, client_h: i32) -> int {
 	scale := 1
 	for {
@@ -2531,11 +2456,6 @@ get_buffer_scale :: proc(client_w, client_h: i32) -> int {
 _main :: proc(allocator: runtime.Allocator) {
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
-
-	{
-		context.allocator = allocator
-		load_resources()
-	}
 
 	config_dir, err := os2.user_config_dir(allocator)
 	assert(err == nil && config_dir != "", "Could not find user config directory")
@@ -2591,9 +2511,6 @@ _main :: proc(allocator: runtime.Allocator) {
 	defer {
 		thread.terminate(render_thread, 0)
 		thread.destroy(render_thread)
-		when GL {
-			gl.disable_opengl(&window)
-		}
 	}
 
 	for !window.must_close {

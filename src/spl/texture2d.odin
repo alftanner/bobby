@@ -78,7 +78,8 @@ draw_from_texture :: proc(dst: ^Texture2D, src: Texture2D, pos: [2]int, src_rect
 	}
 }
 
-draw_rect :: proc(dst: ^Texture2D, rect: Rect, color: Color, filled: bool = true) {
+draw_rect :: proc(dst: ^Texture2D, rect: Rect, col: image.RGBA_Pixel, filled: bool = true) {
+	c := color(col)
 	endx := min(rect.x + rect.size[0], dst.size[0])
 	endy := min(rect.y + rect.size[1], dst.size[1])
 
@@ -90,7 +91,7 @@ draw_rect :: proc(dst: ^Texture2D, rect: Rect, color: Color, filled: bool = true
 		}
 
 		dp := y * dst.size[0] + x
-		blend_pixel(&dst.pixels[dp], color)
+		blend_pixel(&dst.pixels[dp], c)
 	}
 }
 
