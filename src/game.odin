@@ -4,10 +4,7 @@ import "core:time"
 import "core:thread"
 import "core:sync"
 import "core:runtime"
-import "core:math"
-import "core:slice"
 import "core:container/small_array"
-import "core:strconv"
 import "core:image"
 import _ "core:image/png"
 import "core:bytes"
@@ -23,6 +20,11 @@ import spl "spl"
 GAME_TITLE :: "Bobby Carrot Remastered"
 TIMER_FAIL :: "Failed to create a timer. I would use sleep() instead, but @mmozeiko said that sleeping is bad."
 
+Renderer :: enum {
+	Software,
+	GL,
+}
+
 Score :: struct {
 	time: time.Duration,
 	steps: int,
@@ -32,6 +34,7 @@ Settings :: struct {
 	fps: uint,
 	vsync: bool,
 	show_stats: bool,
+	renderer: Renderer,
 
 	last_unlocked_levels: [Campaign]int,
 	campaign: Campaign,
@@ -45,6 +48,7 @@ Settings :: struct {
 default_settings: Settings : {
 	fps = 30,
 	vsync = true,
+	renderer = .GL,
 }
 settings: Settings = default_settings
 
@@ -61,18 +65,26 @@ CREDITS_LENGTH :: TPS_SECOND * 3
 END_LENGTH :: TPS_SECOND * 3
 BUFFER_W :: TILES_W * TILE_SIZE
 BUFFER_H :: TILES_H * TILE_SIZE
+CANVAS_SIZE :: [2]int{BUFFER_W, BUFFER_H}
 DEFAULT_SCALE :: 3
 WINDOW_W :: BUFFER_W * DEFAULT_SCALE
 WINDOW_H :: BUFFER_H * DEFAULT_SCALE
 
 Font :: struct {
-	using texture: Texture2D,
+	using texture: ^Texture2D,
 	table: map[rune][2]int,
 	glyph_size: [2]int,
 }
 general_font: Font
 hud_font: Font
-atlas, splashes, logo: Texture2D
+
+Textures :: enum {
+	General_Font,
+	Atlas,
+	Splashes,
+	Logo,
+}
+textures: [Textures]Texture2D
 
 Direction :: enum {
 	None,
@@ -82,10 +94,8 @@ Direction :: enum {
 	Up,
 }
 
-Sprite :: Rect
-
 Sprite_Offset :: struct {
-	using sprite: Sprite,
+	using rect: Rect,
 	offset: [2]int,
 }
 
@@ -160,9 +170,6 @@ Scene :: enum {
 }
 
 World :: struct {
-	updated: bool,
-	lock: sync.Mutex,
-
 	scene: Scene,
 	next_scene: Scene,
 
@@ -175,10 +182,12 @@ World :: struct {
 	scoreboard: Scoreboard,
 	scoreboard_page: int,
 
-	level: Level,
 	player: Player,
 }
 world: World
+world_updated: bool
+world_lock: sync.Mutex
+world_level: Level
 
 Key_State :: enum {
 	Pressed,
@@ -195,25 +204,31 @@ Keyboard_State :: struct {
 State :: struct {
 	// TODO: i128 with atomic_load/store
 	client_size: i64,
+	viewport: [4]int,
+	rendering_scale: f32,
 
 	// _work shows how much time was spent on actual work in that frame before sleep
 	// _time shows total time of the frame, sleep included
 	frame_work, frame_time: time.Duration,
 	tick_work, tick_time: time.Duration,
+	last_update, last_frame, fps, tps: Average_Calculator,
+
 	previous_tick: time.Tick,
 	loaded_resources: bool,
 
 	keyboard: Keyboard_State,
+
+	finish_rendering, finished_rendering: bool,
 }
 global_state: State
 
 window: spl.Window
 
 SPACE_BETWEEN_ARROW_AND_TEXT :: 3
-RIGHT_ARROW :: Sprite{{183, 115}, {5, 9}}
-UP_ARROW :: Sprite{{183, 125}, {9, 5}}
-INTRO_SPLASH :: Sprite{{0, 0}, {128, 128}}
-END_SPLASH :: Sprite{{0, 128}, {128, 128}}
+RIGHT_ARROW :: Rect{{183, 115}, {5, 9}}
+UP_ARROW :: Rect{{183, 125}, {9, 5}}
+INTRO_SPLASH :: Rect{{0, 0}, {128, 128}}
+END_SPLASH :: Rect{{0, 128}, {128, 128}}
 
 Tiles :: enum {
 	Grass,
@@ -314,7 +329,7 @@ Sprites :: enum {
 	Egg,
 }
 
-sprites: [Sprites]Sprite
+sprites: [Sprites]Rect
 
 HUD_Sprites :: enum {
 	Carrot,
@@ -326,7 +341,7 @@ HUD_Sprites :: enum {
 	Success,
 }
 
-hud_sprites: [HUD_Sprites]Sprite = {
+hud_sprites: [HUD_Sprites]Rect = {
 	.Carrot     = {{128, 80}, {14, 13}},
 	.Egg        = {{142, 80}, {9,  13}},
 	.Eyes       = {{151, 80}, {15, 13}},
@@ -425,13 +440,13 @@ fading_animation := [?]Sprite_Offset {
 }
 FADING_ANIM_FRAME_LEN :: 2 when !ODIN_DEBUG else 1
 
-end_animation := [?]Sprite {
+end_animation := [?]Rect {
 	{{64,  80}, {16, 16}},
 	{{80,  80}, {16, 16}},
 	{{96,  80}, {16, 16}},
 	{{112, 80}, {16, 16}},
 }
-belt_animation := [?]Sprite {
+belt_animation := [?]Rect {
 	{{0,  64}, {16, 16}},
 	{{16, 64}, {16, 16}},
 	{{32, 64}, {16, 16}},
@@ -466,7 +481,6 @@ limit_frame :: proc(frame_time: time.Duration, frame_limit: uint) {
 	time.sleep(to_sleep)
 }
 */
-
 assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Code_Location) -> ! {
 	error := fmt.tprintf("{}({}:{}) {}", loc.file_path, loc.line, loc.column, prefix)
 	if len(message) > 0 {
@@ -491,7 +505,7 @@ logger_proc :: proc(data: rawptr, level: runtime.Logger_Level, text: string, opt
 		fmt.eprintf("[{}] {}\n", level, text)
 	}
 }
-
+/*
 cycles_lap_time :: proc(prev: ^u64) -> u64 {
 	cycles: u64
 	cycle_count := time.read_cycle_counter()
@@ -501,8 +515,9 @@ cycles_lap_time :: proc(prev: ^u64) -> u64 {
 	prev^ = cycle_count
 	return cycles
 }
-
+*/
 measure_or_draw_text :: proc(
+	renderer: Renderer,
 	t: ^Texture2D,
 	font: Font,
 	text: string,
@@ -524,8 +539,14 @@ measure_or_draw_text :: proc(
 
 		glyph_pos := font.table[ch] or_else font.table['?']
 		if !no_draw {
-			draw_from_texture(t, font.texture, pos + 1, {glyph_pos, font.glyph_size}, .None, shadow_color)
-			draw_from_texture(t, font.texture, pos, {glyph_pos, font.glyph_size}, .None, color)
+			switch renderer {
+			case .Software:
+				draw_from_texture_software(t, font.texture^, pos + 1, {glyph_pos, font.glyph_size}, {}, shadow_color)
+				draw_from_texture_software(t, font.texture^, pos, {glyph_pos, font.glyph_size}, {}, color)
+			case .GL:
+				draw_from_texture_gl(font.texture^, pos + 1, {glyph_pos, font.glyph_size}, {}, shadow_color, false)
+				draw_from_texture_gl(font.texture^, pos, {glyph_pos, font.glyph_size}, {}, color, false)
+			}
 		}
 
 		pos.x += font.glyph_size[0] + 1
@@ -536,56 +557,31 @@ measure_or_draw_text :: proc(
 	return
 }
 
-draw_text :: #force_inline proc(
-	t: ^Texture2D,
-	font: Font,
-	text: string,
-	pos: [2]int,
-	color: image.RGB_Pixel = {255, 255, 255},
-	shadow_color: image.RGB_Pixel = {0, 0, 0},
-) -> (region: Rect) {
-	return measure_or_draw_text(t, font, text, pos, color, shadow_color)
-}
-
 measure_text :: #force_inline proc(font: Font, text: string) -> [2]int {
-	region := measure_or_draw_text(nil, font, text, {}, {}, {}, true)
+	region := measure_or_draw_text(.Software, nil, font, text, {}, {}, {}, true)
 	return region.size
 }
 
-draw_stats :: proc(t: ^Texture2D) -> Rect {
-	@thread_local time_waited: time.Duration
-	@thread_local lastu, lastf, fps, tps: Average_Calculator
+calculate_stats :: proc() {
+	@static time_waited: time.Duration
 
-	avg_add(&lastu, time.duration_milliseconds(sync.atomic_load(&global_state.tick_work)))
-	avg_add(&lastf, time.duration_milliseconds(sync.atomic_load(&global_state.frame_work)))
-	avg_add(&tps, 1000/time.duration_milliseconds(sync.atomic_load(&global_state.tick_time)))
-	avg_add(&fps, 1000/time.duration_milliseconds(sync.atomic_load(&global_state.frame_time)))
+	avg_add(&global_state.last_update, time.duration_milliseconds(sync.atomic_load(&global_state.tick_work)))
+	avg_add(&global_state.last_frame, time.duration_milliseconds(sync.atomic_load(&global_state.frame_work)))
+	avg_add(&global_state.tps, 1000/time.duration_milliseconds(sync.atomic_load(&global_state.tick_time)))
+	avg_add(&global_state.fps, 1000/time.duration_milliseconds(sync.atomic_load(&global_state.frame_time)))
 
 	// DEBUG: see every frame time individually
 	//fmt.println(1000/time.duration_milliseconds(sync.atomic_load(&global_state.frame_time)))
 
-	@thread_local tick: time.Tick
+	@static tick: time.Tick
 	time_waited += time.tick_lap_time(&tick)
 	if time_waited >= 50 * time.Millisecond {
-		avg_calculate(&lastu)
-		avg_calculate(&lastf)
-		avg_calculate(&tps)
-		avg_calculate(&fps)
 		time_waited = 0
+		avg_calculate(&global_state.last_update)
+		avg_calculate(&global_state.last_frame)
+		avg_calculate(&global_state.tps)
+		avg_calculate(&global_state.fps)
 	}
-
-	tbuf: [256]byte
-	text := fmt.bprintf(
-		tbuf[:],
-`{}FPS{} {}ms last
-{}TPS {}ms last`,
-		u32(math.round(fps.average)), " (VSYNC)" if settings.vsync else "", lastf.average,
-		u32(math.round(tps.average)), lastu.average,
-	)
-
-	pos: [2]int = {t.size[0] - 2, t.size[1] - 2}
-	pos -= measure_text(general_font, text)
-	return draw_text(t, general_font, text, pos)
 }
 
 get_fade_alpha :: proc(fade: Animation, frame_delta: f32) -> u8 {
@@ -630,24 +626,8 @@ get_intro_alpha :: proc(intro: Animation, frame_delta: f32) -> u8 {
 	return alpha
 }
 
-draw_credits :: proc(t: ^Texture2D, language: Language) {
-	str := language_strings[language][.Credits_Original]
-	str2 := language_strings[language][.Credits_Remastered]
-
-	str_size := measure_text(general_font, str)
-	str2_size := measure_text(general_font, str2)
-	size_h := str_size[1] + general_font.glyph_size[1] + logo.size[1] + general_font.glyph_size[1] + str2_size[1]
-	off_y := (t.size[1] - size_h) / 2
-
-	draw_text(t, general_font, str, {(t.size[0] - str_size[0]) / 2, off_y})
-	off_y += str_size[1] + general_font.glyph_size[1]
-	draw_from_texture(t, logo, {(t.size[0] - logo.size[0]) / 2, off_y}, {{}, logo.size})
-	off_y += logo.size[1] + general_font.glyph_size[1]
-	draw_text(t, general_font, str2, {(t.size[0] - str2_size[0]) / 2, off_y})
-}
-
 interpolate_tile_position :: #force_inline proc(p: Player, frame_delta: f32) -> [2]f32 {
-	if p.walking.state {
+	if p.walking.timer != 0 {
 		ANIM_TIME :: f32(WALKING_ANIM_FRAME_LEN * WALKING_ANIM_LEN) - 1
 		delta := (f32(p.walking.timer) + frame_delta) / ANIM_TIME
 		// even if frame was too long after the tick, we don't want to overextend the position any further than it can normally be
@@ -663,7 +643,6 @@ interpolate_tile_position :: #force_inline proc(p: Player, frame_delta: f32) -> 
 
 	return {f32(p.x), f32(p.y)}
 }
-
 /*
 interpolate_smooth_position :: #force_inline proc(p: Player, frame_delta: f32) -> [2]f32 {
 	diff := p.pos - p.prev
@@ -674,7 +653,6 @@ interpolate_smooth_position :: #force_inline proc(p: Player, frame_delta: f32) -
 	return {x, y}
 }
 */
-
 get_walking_sprite :: proc(frame: uint) -> Sprite_Offset {
 	sprite := walking_animation[frame]
 	#partial switch world.player.direction {
@@ -688,9 +666,9 @@ get_walking_sprite :: proc(frame: uint) -> Sprite_Offset {
 	return sprite
 }
 
-get_sprite_from_pos :: proc(pos: [2]int, level: Level) -> Sprite {
+get_sprite_from_pos :: proc(pos: [2]int, level: Level) -> Rect {
 	tile := get_tile_from_pos(pos, level)
-	sprite: Sprite = sprites[.Ground]
+	sprite := sprites[.Ground]
 
 	switch tile {
 	case .Grass:
@@ -766,105 +744,6 @@ rect_intersection :: proc(r1, r2: Rect) -> Rect {
 	return {}
 }
 */
-draw_scoreboard :: proc(t: ^Texture2D, q: ^Region_Cache, labels: []Text_Label, page: int) {
-	if len(labels) == 0 do return
-
-	DISABLED :: image.RGB_Pixel{75, 75, 75}
-	//NORMAL :: image.RGB_Pixel{145, 145, 145}
-	SELECTED :: image.RGB_Pixel{255, 255, 255}
-
-	pages := ((len(labels) - 1) / 10) + 1
-	label_idx := page * 10
-
-	page_labels := labels[label_idx:min(label_idx + 10, len(labels))]
-
-	// 10 lables per page + 9 lines between them
-	page_h := general_font.glyph_size[1] * 19
-	y := (BUFFER_H - page_h) / 2
-
-	up_arrow, down_arrow: Rect
-	up_arrow.size = UP_ARROW.size
-	down_arrow.size = UP_ARROW.size
-
-	up_arrow.x = (BUFFER_W - UP_ARROW.size[0]) / 2
-	down_arrow.x = up_arrow.x
-
-	up_arrow.y = (y - UP_ARROW.size[1]) / 2
-	down_arrow.y = BUFFER_H - up_arrow.y
-
-	for label in page_labels {
-		region := label.rect
-		region.y = y
-		text_buf := label.text_buf
-		text := string(text_buf[:label.text_len])
-
-		draw_text(t, general_font, text, region.pos, SELECTED)
-		small_array.push_back(q, region)
-
-		y += region.size[1] + general_font.glyph_size[1]
-	}
-
-	{
-		color := SELECTED
-		if page == 0 {
-			color = DISABLED
-		}
-		draw_from_texture(t, atlas, up_arrow.pos, UP_ARROW, .None, color)
-		small_array.push_back(q, up_arrow)
-	}
-	{
-		color := SELECTED
-		if page == pages - 1 {
-			color = DISABLED
-		}
-		draw_from_texture(t, atlas, down_arrow.pos, UP_ARROW, .Vertical, color)
-		small_array.push_back(q, down_arrow)
-	}
-}
-
-draw_menu :: proc(t: ^Texture2D, q: ^Region_Cache, options: []Menu_Option, selected: int) {
-	DISABLED :: image.RGB_Pixel{75, 75, 75}
-	NORMAL :: image.RGB_Pixel{145, 145, 145}
-	SELECTED :: image.RGB_Pixel{255, 255, 255}
-
-	for option, idx in options {
-		region := option.rect
-		text_buf := option.text_buf
-		text := string(text_buf[:option.text_len])
-
-		color := NORMAL
-		if idx == selected {
-			color = SELECTED
-		}
-
-		x := option.x
-		if option.arrows != nil {
-			color := color
-			if !option.arrows.?[0].enabled {
-				color = DISABLED
-			}
-			draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .Horizontal, color)
-			x += RIGHT_ARROW.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT
-			region.size[0] += (RIGHT_ARROW.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT) * 2
-			region.y -= 1
-			region.size[1] += 2
-		}
-
-		draw_text(t, general_font, text, {x, option.y}, color)
-
-		if option.arrows != nil {
-			color := color
-			if !option.arrows.?[1].enabled {
-				color = DISABLED
-			}
-			x += option.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT
-			draw_from_texture(t, atlas, {x, option.y - 1}, RIGHT_ARROW, .None, color)
-		}
-
-		small_array.push_back(q, region)
-	}
-}
-
 load_texture :: proc(data: []byte) -> (t: Texture2D) {
 	img, err := image.load(data)
 	assert(err == nil, fmt.tprint(err))
@@ -880,8 +759,13 @@ load_texture :: proc(data: []byte) -> (t: Texture2D) {
 	return
 }
 
-load_resources :: proc() {
-	general_font.texture = load_texture(#load("../res/font.png"))
+load_textures :: proc() {
+	textures[.General_Font] = load_texture(#load("../res/font.png"))
+	textures[.Atlas] = load_texture(#load("../res/atlas.png"))
+	textures[.Splashes] = load_texture(#load("../res/splashes.png"))
+	textures[.Logo] = load_texture(#load("../res/logo.png"))
+
+	general_font.texture = &textures[.General_Font]
 	general_font.glyph_size = {5, 7}
 	general_font.table = make(map[rune][2]int)
 	for ch in ` 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ?'".,:;~!@#$^&_|\/%*+-=<>()[]{}` {
@@ -919,9 +803,7 @@ load_resources :: proc() {
 		general_font.table['Т'] = general_font.table['T']
 	}
 
-	atlas = load_texture(#load("../res/atlas.png"))
-
-	hud_font.texture = atlas
+	hud_font.texture = &textures[.Atlas]
 	hud_font.glyph_size = {5, 8}
 	hud_font.table = make(map[rune][2]int)
 	for ch in `0123456789:?` {
@@ -938,17 +820,46 @@ load_resources :: proc() {
 		pos: [2]int = {idx%ATLAS_TILES_W, idx/ATLAS_TILES_W}
 		sprites[s] = {pos * TILE_SIZE, {TILE_SIZE, TILE_SIZE}}
 	}
+}
 
-	splashes = load_texture(#load("../res/splashes.png"))
-	logo = load_texture(#load("../res/logo.png"))
+copy_level :: proc(dst, src: ^Level, q: ^Tile_Queue) -> (changed: bool) {
+	if src.changed {
+		src.changed = false
+		changed = true
+
+		if len(dst.tiles) > 0 {
+			delete(dst.tiles)
+		}
+		dst.size = world_level.size
+		dst.tiles = make([]Tiles, dst.size[0] * dst.size[1])
+	}
+
+	dst.current = src.current
+	dst.next = src.next
+	dst.animation = src.animation
+	dst.carrots = src.carrots
+	dst.eggs = src.eggs
+	dst.can_end = src.can_end
+	dst.ended = src.ended
+	dst.score = src.score
+
+	for tile, idx in src.tiles {
+		old_tile := dst.tiles[idx]
+		dst.tiles[idx] = tile
+
+		if q == nil do continue
+
+		if old_tile != tile || tile in belt_tiles || (tile == .End && dst.can_end) {
+			small_array.push_back(q, idx)
+		}
+	}
+
+	return
 }
 
 render :: proc(t: ^thread.Thread) {
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
-
-	load_resources()
-	sync.atomic_store(&global_state.loaded_resources, true)
 
 	timer: spl.Timer
 	if !settings.vsync {
@@ -960,435 +871,36 @@ render :: proc(t: ^thread.Thread) {
 		}
 	}
 
-	scene: Scene
-	intro, fade: Animation
-	scoreboard: Scoreboard
-	campaign: Campaign
-	menu_options: Menu_Options
-	selected_option, scoreboard_page: int
-	selected_levels: [Campaign]int
-	language: Language
-	player: Player
+	load_textures()
+	sync.atomic_store(&global_state.loaded_resources, true)
 
-	level: Level
-
-	previous_tick: time.Tick
-	tick_time: f32
-	diff, offset: [2]f32
-
-	canvas, scene_texture: Texture2D
-	canvas_cache, canvas_cache_slow: Region_Cache
-
-	backgrounds: [Campaign]Texture2D
-	tiles_updated: Tile_Queue
-
-	canvas = texture_make(BUFFER_W, BUFFER_H)
-	scene_texture = texture_make(BUFFER_W, BUFFER_H)
-	for bg, c in &backgrounds {
-		bg = texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
-
-		sprite := sprites[.Grass if c == .Carrot_Harvest else .Ground]
-		for y in 0..=TILES_H do for x in 0..=TILES_W {
-			pos: [2]int = {x, y}
-			draw_from_texture(&bg, atlas, pos * TILE_SIZE, sprite)
-		}
-	}
-
-	intro_alpha: u8
 	for {
-		start_tick := time.tick_now()
-
-		canvas_redraw, scene_redraw, cache_slow_redraw: bool
-		old_fade_state := fade.state
-		if sync.atomic_load(&world.updated) {
-			sync.guard(&world.lock)
-			defer sync.atomic_store(&world.updated, false)
-
-			if world.level.changed {
-				world.level.changed = false
-				scene_redraw = true
-
-				if len(level.tiles) > 0 {
-					delete(level.tiles)
-				}
-				level.size = world.level.size
-				level.tiles = make([]Tiles, level.size[0] * level.size[1])
-
-				diff = {f32(TILES_W - level.size[0]), f32(TILES_H - level.size[1])}
-			}
-			{ // copy and collect updates
-				level.current = world.level.current
-				level.next = world.level.next
-				level.animation = world.level.animation
-				level.carrots = world.level.carrots
-				level.eggs = world.level.eggs
-				level.can_end = world.level.can_end
-				level.ended = world.level.ended
-				level.score = world.level.score
-
-				for tile, idx in world.level.tiles {
-					old_tile := level.tiles[idx]
-					level.tiles[idx] = tile
-
-					if old_tile != tile || tile in belt_tiles || (tile == .End && level.can_end) {
-						small_array.push_back(&tiles_updated, idx)
-					}
-				}
-			}
-
-			player = world.player
-			intro = world.intro
-
-			if scene != world.scene {
-				scene_redraw = true
-			}
-			scene = world.scene
-
-			fade = world.fade
-			menu_options = world.menu_options
-
-			scoreboard = world.scoreboard
-			if scoreboard_page != world.scoreboard_page || selected_option != world.selected_option ||
-			selected_levels != settings.selected_levels || language != settings.language {
-				cache_slow_redraw = true
-			}
-			if campaign != settings.campaign {
-				scene_redraw = true
-			}
-			scoreboard_page = world.scoreboard_page
-			selected_option = world.selected_option
-			selected_levels = settings.selected_levels
-			campaign = settings.campaign
-			language = settings.language
-
-			previous_tick = global_state.previous_tick
-			tick_time = f32(time.duration_milliseconds(sync.atomic_load(&global_state.tick_time)))
+		switch settings.renderer {
+		case .Software:
+			render_software(&timer)
+		case .GL:
+			render_gl(&timer)
 		}
 
-		if old_fade_state || fade.state {
-			cache_slow_redraw = true
-		}
-
-		// for smooth drawing
-		frame_delta := f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now()))) / tick_time
-		player_pos := interpolate_tile_position(player, frame_delta)
-
-		draw_world_background: bool
-		#partial switch scene {
-		case .Game: // calculate offset
-			old_offset := offset
-			offset = {}
-
-			if diff.x > 0 {
-				offset.x = diff.x / 2
-				draw_world_background = true
-			} else {
-				off := (f32(TILES_W) / 2) - (f32(player_pos.x) + 0.5)
-				if diff.x > off {
-					offset.x = diff.x
-				} else {
-					offset.x = min(off, 0)
-				}
-			}
-
-			if diff.y > 0 {
-				offset.y = diff.y / 2
-				draw_world_background = true
-			} else {
-				off := (f32(TILES_H) / 2) - (f32(player_pos.y) + 0.5)
-				if diff.y > off {
-					offset.y = diff.y
-				} else {
-					offset.y = min(off, 0)
-				}
-			}
-
-			// redraw scene if camera moved
-			if old_offset != offset {
-				scene_redraw = true
-			}
-
-			if !scene_redraw {
-				lvl_offset: [2]int
-				lvl_offset.x = int(offset.x * TILE_SIZE)
-				lvl_offset.y = int(offset.y * TILE_SIZE)
-
-				// draw updated tiles to scene texture
-				for tile_idx in small_array.pop_back_safe(&tiles_updated) {
-					pos: [2]int = {tile_idx%level.size[0], tile_idx/level.size[0]}
-					sprite := get_sprite_from_pos(pos, level)
-
-					region: Rect
-					region.pos = (pos * TILE_SIZE) + lvl_offset
-					region.size = {TILE_SIZE, TILE_SIZE}
-
-					draw_from_texture(&scene_texture, atlas, region.pos, sprite)
-					small_array.push_back(&canvas_cache, region)
-				}
-			} else {
-				small_array.clear(&tiles_updated)
-			}
-		case .Intro: // do not redraw the intro after alpha became 0
-			old_intro_alpha := intro_alpha
-			intro_alpha = get_intro_alpha(intro, frame_delta)
-			if old_intro_alpha != 0 || intro_alpha != 0 {
-				scene_redraw = true
-			}
-		}
-
-		if scene_redraw {
-			switch scene {
-			case .Game:
-				lvl_offset: [2]int
-				lvl_offset.x = int(offset.x * TILE_SIZE)
-				lvl_offset.y = int(offset.y * TILE_SIZE)
-
-				if draw_world_background { // TODO: only draw needed parts, not the entire thing
-					bg_rect: Rect
-					bg_rect.pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
-					bg_rect.pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
-					bg_rect.size = backgrounds[.Carrot_Harvest].size - bg_rect.pos
-					draw_from_texture(&scene_texture, backgrounds[.Carrot_Harvest], {}, bg_rect)
-				}
-				for _, idx in level.tiles {
-					pos: [2]int = {idx%level.size[0], idx/level.size[0]}
-					sprite := get_sprite_from_pos(pos, level)
-					draw_from_texture(&scene_texture, atlas, (pos * TILE_SIZE) + lvl_offset, sprite)
-				}
-			case .Pause_Menu, .Main_Menu, .Scoreboard:
-				texture := backgrounds[campaign]
-				if scene == .Pause_Menu {
-					texture = canvas
-				}
-				draw_from_texture(&scene_texture, texture, {}, {{}, scene_texture.size})
-				draw_rect(&scene_texture, {{}, scene_texture.size}, {0, 0, 0, 0xAA})
-			case .Intro:
-				slice.fill(scene_texture.pixels, BLACK)
-
-				off := (scene_texture.size - INTRO_SPLASH.size) / 2
-				draw_from_texture(&scene_texture, splashes, off, INTRO_SPLASH)
-				draw_rect(&scene_texture, {off, INTRO_SPLASH.size}, {0, 0, 0, intro_alpha})
-			case .End:
-				slice.fill(scene_texture.pixels, BLACK)
-
-				off := (scene_texture.size - END_SPLASH.size) / 2
-				draw_from_texture(&scene_texture, splashes, off, END_SPLASH)
-			case .Credits:
-				slice.fill(scene_texture.pixels, BLACK)
-
-				draw_credits(&scene_texture, language)
-			case .None:
-				slice.fill(scene_texture.pixels, BLACK)
-			}
-
-			canvas_redraw = true
-		}
-
-		if canvas_redraw {
-			small_array.clear(&canvas_cache)
-			small_array.clear(&canvas_cache_slow)
-			draw_from_texture(&canvas, scene_texture, {}, {{}, scene_texture.size})
-		} else { // cached rendering
-			for cache_region in small_array.pop_back_safe(&canvas_cache) {
-				draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
-			}
-		}
-
-		if canvas_redraw || cache_slow_redraw {
-			for cache_region in small_array.pop_back_safe(&canvas_cache_slow) {
-				draw_from_texture(&canvas, scene_texture, cache_region.pos, cache_region)
-			}
-
-			// slow cached drawing
-			#partial switch scene {
-			case .Main_Menu, .Pause_Menu:
-				draw_menu(&canvas, &canvas_cache_slow, small_array.slice(&menu_options), selected_option)
-			case .Scoreboard:
-				draw_scoreboard(&canvas, &canvas_cache_slow, small_array.slice(&scoreboard), scoreboard_page)
-			}
-		}
-
-		// do scene specific drawing that gets into fast cache, such as player/HUD/etc
-		if scene == .Game {
-			// draw player
-			if !level.ended || (level.ended && player.fading.state) {
-				pos := (player_pos + offset) * TILE_SIZE
-				px := int(pos.x) + player.sprite.offset.x
-				py := int(pos.y) + player.sprite.offset.y
-				draw_from_texture(&canvas, atlas, {px, py}, player.sprite)
-				small_array.push_back(&canvas_cache, Rect{{px, py}, player.sprite.size})
-			}
-
-			// HUD
-			if !level.ended {
-				// left part
-				{
-					tbuf: [8]byte
-					time_str := fmt.bprintf(tbuf[:], "{:02i}:{:02i}", int(time.duration_minutes(level.score.time)), int(time.duration_seconds(level.score.time)) % 60)
-					small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, time_str, {2, 2}))
-				}
-				// level begin screen
-				if time.duration_seconds(level.score.time) < 2 {
-					tbuf: [16]byte
-					level_str := fmt.bprintf(tbuf[:], "{} {}", language_strings[settings.language][.Level], level.current + 1)
-					size := measure_text(general_font, level_str)
-					pos := (canvas.size - size) / 2
-					small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, level_str, pos))
-				}
-				// right part
-				{
-					pos: [2]int = {canvas.size[0] - 2, 2}
-
-					if level.carrots > 0 {
-						sprite := hud_sprites[.Carrot]
-						pos.x -= sprite.size[0]
-						draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, Rect{pos, sprite.size})
-						pos.x -= 2
-
-						tbuf: [8]byte
-						str := strconv.itoa(tbuf[:], level.carrots)
-						{
-							size := measure_text(hud_font, str)
-							pos.x -= size[0]
-						}
-						small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, str, {pos.x, pos.y + 3}))
-						pos.y += sprite.size[1] + 2
-						pos.x = canvas.size[0] - 2
-					}
-
-					if level.eggs > 0 {
-						sprite := hud_sprites[.Egg]
-						pos.x -= sprite.size[0]
-						draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, Rect{pos, sprite.size})
-						pos.x -= 2
-
-						tbuf: [8]byte
-						str := strconv.itoa(tbuf[:], level.eggs)
-						{
-							size := measure_text(hud_font, str)
-							pos.x -= size[0]
-						}
-						small_array.push_back(&canvas_cache, draw_text(&canvas, hud_font, str, {pos.x, pos.y + 3}))
-						pos.y += sprite.size[1] + 2
-						pos.x = canvas.size[0] - 2
-					}
-
-					if player.silver_key {
-						sprite := hud_sprites[.Silver_Key]
-						pos.x -= sprite.size[0]
-						draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, Rect{pos, sprite.size})
-						pos.x -= 2
-					}
-					if player.golden_key {
-						sprite := hud_sprites[.Golden_Key]
-						pos.x -= sprite.size[0]
-						draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, Rect{pos, sprite.size})
-						pos.x -= 2
-					}
-					if player.copper_key {
-						sprite := hud_sprites[.Copper_Key]
-						pos.x -= sprite.size[0]
-						draw_from_texture(&canvas, atlas, pos, sprite)
-						small_array.push_back(&canvas_cache, Rect{pos, sprite.size})
-						pos.x -= 2
-					}
-				}
-			}
-
-			// level end screen
-			if level.ended && !player.fading.state {
-				total_h: int
-				success := hud_sprites[.Success]
-				success_x := (canvas.size[0] - success.size[0]) / 2
-				total_h += success.size[1] + (general_font.glyph_size[1] * 2)
-
-				tbuf: [64]byte
-				time_str := fmt.bprintf(tbuf[:32], "{}: {:02i}:{:02i}:{:02i}",
-					language_strings[settings.language][.Time],
-					int(time.duration_minutes(level.score.time)),
-					int(time.duration_seconds(level.score.time)) % 60,
-					int(time.duration_milliseconds(level.score.time)) % 60,
-				)
-				time_x, time_h: int
-				{
-					size := measure_text(general_font, time_str)
-					time_x = (canvas.size[0] - size[0]) / 2
-					time_h = size[1]
-				}
-				total_h += time_h + general_font.glyph_size[1]
-
-				steps_str := fmt.bprintf(tbuf[32:], "{}: {}", language_strings[settings.language][.Steps], level.score.steps)
-				steps_x, steps_h: int
-				{
-					size := measure_text(general_font, steps_str)
-					steps_x = (canvas.size[0] - size[0]) / 2
-					steps_h = size[1]
-				}
-				total_h += steps_h + (general_font.glyph_size[1] * 2)
-
-				hint_str := language_strings[settings.language][.Press_Enter]
-				hint_x, hint_h: int
-				{
-					size := measure_text(general_font, hint_str)
-					hint_x = (canvas.size[0] - size[0]) / 2
-					hint_h = size[1]
-				}
-				total_h += hint_h
-
-				pos: [2]int
-				pos.x = (canvas.size[0] - success.size[0]) / 2
-				pos.y = (canvas.size[1] - total_h) / 2
-				draw_from_texture(&canvas, atlas, pos, success)
-				small_array.push_back(&canvas_cache, Rect{pos, success.size})
-				pos.y += success.size[1] + (general_font.glyph_size[1] * 2)
-
-				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, time_str, {time_x, pos.y}))
-				pos.y += time_h + general_font.glyph_size[1]
-
-				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, steps_str, {steps_x, pos.y}))
-				pos.y += steps_h + (general_font.glyph_size[1] * 2)
-
-				small_array.push_back(&canvas_cache, draw_text(&canvas, general_font, hint_str, {hint_x, pos.y}))
-			}
-		}
-
-		fade_alpha := get_fade_alpha(fade, frame_delta)
-		if fade_alpha != 0 {
-			draw_rect(&canvas, {{}, canvas.size}, {0, 0, 0, fade_alpha})
-			small_array.clear(&canvas_cache_slow)
-			small_array.clear(&canvas_cache)
-			small_array.push_back(&canvas_cache, Rect{{}, canvas.size})
-		}
-
-		if settings.show_stats {
-			small_array.push_back(&canvas_cache, draw_stats(&canvas))
-		}
-
-		sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
-
-		if settings.vsync {
-			spl.send_user_event(&window, {data = &canvas})
-			spl.wait_vblank()
-			sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
-		} else {
-			spl.wait_timer(&timer)
-			sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
-			spl.send_user_event(&window, {data = &canvas})
+		if sync.atomic_load(&global_state.finish_rendering) {
+			break
 		}
 	}
+
+	#partial switch settings.renderer {
+	case .GL: render_gl_finish()
+	}
+
+	sync.atomic_store(&global_state.finished_rendering, true)
 }
 
 can_move :: proc(pos: [2]int, d: Direction) -> bool {
 	pos := pos
-	current_tile := get_tile_from_pos(pos, world.level)
+	current_tile := get_tile_from_pos(pos, world_level)
 
 	#partial switch d {
 	case .Right:
-		if pos.x == world.level.size[0] - 1 {
+		if pos.x == world_level.size[0] - 1 {
 			return false
 		}
 		pos.x += 1
@@ -1398,7 +910,7 @@ can_move :: proc(pos: [2]int, d: Direction) -> bool {
 		}
 		pos.x -= 1
 	case .Down:
-		if pos.y == world.level.size[1] - 1 {
+		if pos.y == world_level.size[1] - 1 {
 			return false
 		}
 		pos.y += 1
@@ -1408,7 +920,7 @@ can_move :: proc(pos: [2]int, d: Direction) -> bool {
 		}
 		pos.y -= 1
 	}
-	tile := get_tile_from_pos(pos, world.level)
+	tile := get_tile_from_pos(pos, world_level)
 
 	if tile == .Grass || tile == .Fence || tile == .Egg {
 		return false
@@ -1505,12 +1017,12 @@ start_moving :: proc(d: Direction) {
 	world.player.direction = d
 	player_animation_start(&world.player.walking)
 	if !world.player.belt {
-		world.level.score.steps += 1
+		world_level.score.steps += 1
 	}
 }
 
 move_player :: #force_inline proc(d: Direction) {
-	if world.level.ended || world.player.dying.state || world.player.fading.state || world.player.walking.state {
+	if world_level.ended || world.player.dying.state || world.player.fading.state || world.player.walking.state {
 		return
 	}
 
@@ -1537,13 +1049,13 @@ get_tile_from_pos :: #force_inline proc(pos: [2]int, level: Level) -> Tiles #no_
 }
 
 set_level_tile :: #force_inline proc(pos: [2]int, t: Tiles) {
-	idx := (pos.y * world.level.size[0]) + pos.x
-	world.level.tiles[idx] = t
+	idx := (pos.y * world_level.size[0]) + pos.x
+	world_level.tiles[idx] = t
 }
 
 press_red_button :: proc() {
-	for tile, idx in world.level.tiles {
-		pos: [2]int = {idx%world.level.size[0], idx/world.level.size[0]}
+	for tile, idx in world_level.tiles {
+		pos: [2]int = {idx%world_level.size[0], idx/world_level.size[0]}
 		switch {
 		case tile == .Red_Button:
 			set_level_tile(pos, .Red_Button_Pressed)
@@ -1557,8 +1069,8 @@ press_red_button :: proc() {
 }
 
 press_yellow_button :: proc() {
-	for tile, idx in world.level.tiles {
-		pos: [2]int = {idx%world.level.size[0], idx/world.level.size[0]}
+	for tile, idx in world_level.tiles {
+		pos: [2]int = {idx%world_level.size[0], idx/world_level.size[0]}
 		switch {
 		case tile == .Yellow_Button:
 			set_level_tile(pos, .Yellow_Button_Pressed)
@@ -1580,19 +1092,19 @@ finish_level :: proc(next: int) {
 		scoreboard = settings.eggs_scoreboard[:]
 	}
 
-	if world.level.score.time < scoreboard[world.level.current].time || scoreboard[world.level.current].time == 0 {
-		scoreboard[world.level.current].time = world.level.score.time
+	if world_level.score.time < scoreboard[world_level.current].time || scoreboard[world_level.current].time == 0 {
+		scoreboard[world_level.current].time = world_level.score.time
 	}
 
-	if world.level.score.steps < scoreboard[world.level.current].steps || scoreboard[world.level.current].steps == 0 {
-		scoreboard[world.level.current].steps = world.level.score.steps
+	if world_level.score.steps < scoreboard[world_level.current].steps || scoreboard[world_level.current].steps == 0 {
+		scoreboard[world_level.current].steps = world_level.score.steps
 	}
 
-	world.level.ended = true
-	world.level.next = next
+	world_level.ended = true
+	world_level.next = next
 	last_unlocked_level := &settings.last_unlocked_levels[settings.campaign]
-	if world.level.next > last_unlocked_level^ {
-		last_unlocked_level^ = world.level.next
+	if world_level.next > last_unlocked_level^ {
+		last_unlocked_level^ = world_level.next
 	}
 	player_animation_start(&world.player.fading)
 }
@@ -1605,15 +1117,15 @@ move_player_to_tile :: proc(d: Direction) {
 	case .Down:  world.player.y += 1
 	case .Up:    world.player.y -= 1
 	}
-	original_tile := get_tile_from_pos(original_pos, world.level)
-	current_tile := get_tile_from_pos(world.player, world.level)
+	original_tile := get_tile_from_pos(original_pos, world_level)
+	current_tile := get_tile_from_pos(world.player, world_level)
 
 	switch {
 	case original_tile == .Trap:
 		set_level_tile(original_pos, .Trap_Activated)
 	case original_tile == .Egg_Spot:
 		set_level_tile(original_pos, .Egg)
-		world.level.eggs -= 1
+		world_level.eggs -= 1
 	case original_tile in belt_tiles:
 		if current_tile not_in belt_tiles {
 			// if moved from belt unto anything else
@@ -1627,7 +1139,7 @@ move_player_to_tile :: proc(d: Direction) {
 	switch {
 	case current_tile == .Carrot:
 		set_level_tile(world.player, .Carrot_Hole)
-		world.level.carrots -= 1
+		world_level.carrots -= 1
 	case current_tile == .Silver_Key:
 		set_level_tile(world.player, .Ground)
 		world.player.silver_key = true
@@ -1656,12 +1168,12 @@ move_player_to_tile :: proc(d: Direction) {
 		press_yellow_button()
 	}
 
-	if world.level.carrots == 0 && world.level.eggs == 0 {
-		world.level.can_end = true
+	if world_level.carrots == 0 && world_level.eggs == 0 {
+		world_level.can_end = true
 	}
 
-	if current_tile == .End && world.level.can_end {
-		finish_level(world.level.current + 1)
+	if current_tile == .End && world_level.can_end {
+		finish_level(world_level.current + 1)
 	}
 }
 
@@ -1675,19 +1187,19 @@ switch_scene :: proc(s: Scene) {
 }
 
 main_menu_continue :: proc() {
-	world.level.next = settings.last_unlocked_levels[settings.campaign]
+	world_level.next = settings.last_unlocked_levels[settings.campaign]
 	switch_scene(.Game)
 }
 
 main_menu_new_game :: proc() {
 	settings.selected_levels[settings.campaign] = 0
 	settings.last_unlocked_levels[settings.campaign] = 0
-	world.level.next = 0
+	world_level.next = 0
 	switch_scene(.Game)
 }
 
 main_menu_select_level :: proc() {
-	world.level.next = settings.selected_levels[settings.campaign]
+	world_level.next = settings.selected_levels[settings.campaign]
 	switch_scene(.Game)
 }
 
@@ -1766,8 +1278,8 @@ select_language_next :: proc() {
 restart_level :: proc() {
 	if world.player.fading.state do return
 
-	world.level.next = world.level.current
-	if world.level.ended {
+	world_level.next = world_level.current
+	if world_level.ended {
 		load_level()
 	} else {
 		world.scene = .Game
@@ -1776,7 +1288,7 @@ restart_level :: proc() {
 }
 
 pause_menu_exit :: proc() {
-	world.level.next = -1
+	world_level.next = -1
 	switch_scene(.Game)
 }
 
@@ -2036,14 +1548,14 @@ show_pause_menu :: proc(clear := true) {
 
 load_level :: proc() {
 	world.scene = .Game
-	next := world.level.next
+	next := world_level.next
 
-	if len(world.level.tiles) != 0 {
-		delete(world.level.tiles)
+	if len(world_level.tiles) != 0 {
+		delete(world_level.tiles)
 	}
 
 	world.player = {}
-	world.level = {}
+	world_level = {}
 
 	if next < 0 {
 		show_main_menu()
@@ -2057,14 +1569,14 @@ load_level :: proc() {
 		show_end()
 		return
 	}
-	world.level.size[0] = len(levels[next][0])
-	world.level.size[1] = len(levels[next])
+	world_level.size[0] = len(levels[next][0])
+	world_level.size[1] = len(levels[next])
 	lvl = levels[next]
 
-	world.level.current = next
-	world.level.next = next
-	world.level.tiles = make([]Tiles, world.level.size[0] * world.level.size[1])
-	world.level.changed = true
+	world_level.current = next
+	world_level.next = next
+	world_level.tiles = make([]Tiles, world_level.size[0] * world_level.size[1])
+	world_level.changed = true
 
 	for row, y in lvl {
 		x: int
@@ -2075,9 +1587,9 @@ load_level :: proc() {
 			case .Start:
 				world.player.pos = {x, y}
 			case .Carrot:
-				world.level.carrots += 1
+				world_level.carrots += 1
 			case .Egg_Spot:
-				world.level.eggs += 1
+				world_level.eggs += 1
 			}
 			x += 1
 		}
@@ -2206,11 +1718,11 @@ game_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 		}
 	case .F:
 		if !world.player.fading.state {
-			finish_level(world.level.current + (1 if !shift else -1))
+			finish_level(world_level.current + (1 if !shift else -1))
 		}
 	case .S:
 		if !world.player.fading.state {
-			world.level.next += (1 if !shift else -1)
+			world_level.next += (1 if !shift else -1)
 			load_level()
 		}
 	case .Escape:
@@ -2221,7 +1733,7 @@ game_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 		}
 	case .Enter:
 		if .Pressed in state {
-			if world.level.ended && !world.player.fading.state {
+			if world_level.ended && !world.player.fading.state {
 				switch_scene(.Game)
 			}
 		}
@@ -2234,51 +1746,53 @@ update_game :: proc() {
 	case world.player.fading.state:
 		world.player.fading.frame = world.player.fading.timer / FADING_ANIM_FRAME_LEN
 
-		if world.player.fading.frame >= len(fading_animation) {
-			world.player.fading.state = false
-			world.player.fading.timer = 0
-			world.player.fading.frame = 0
-		} else {
-			if world.level.current == world.level.next {
+		if world.player.fading.frame < len(fading_animation) {
+			if world_level.current == world_level.next {
 				// reverse frames when spawning
 				world.player.fading.frame = len(fading_animation) - 1 - world.player.fading.frame
 			}
 			world.player.sprite = fading_animation[world.player.fading.frame]
-		}
 
-		world.player.fading.timer += 1
+			world.player.fading.timer += 1
+		} else {
+			world.player.fading.state = false
+			world.player.fading.timer = 0
+			world.player.fading.frame = 0
+		}
 	case world.player.dying.state:
 		world.player.dying.frame = world.player.dying.timer / DYING_ANIM_FRAME_LEN
 
-		if world.player.dying.frame >= len(dying_animation) {
-			if world.player.dying.timer - (len(dying_animation) * DYING_ANIM_FRAME_LEN) >= LAYING_DEAD_TIME {
+		if world.player.dying.frame < len(dying_animation) {
+			world.player.sprite = dying_animation[world.player.dying.frame]
+
+			world.player.dying.timer += 1
+		} else {
+			if world.player.dying.timer - (len(dying_animation) * DYING_ANIM_FRAME_LEN) < LAYING_DEAD_TIME {
+				world.player.dying.timer += 1
+			} else {
 				world.player.dying.state = false
 				world.player.dying.timer = 0
 				world.player.dying.frame = 0
 				load_level()
 			}
-		} else {
-			world.player.sprite = dying_animation[world.player.dying.frame]
 		}
-
-		world.player.dying.timer += 1
 	case world.player.walking.state:
 		world.player.walking.frame = world.player.walking.timer / WALKING_ANIM_FRAME_LEN
 
-		if world.player.walking.frame + 1 >= WALKING_ANIM_LEN {
-			world.player.walking.state = false
-			world.player.walking.timer = 0
-			world.player.walking.frame = 0
-			move_player_to_tile(world.player.direction)
-		} else {
+		if world.player.walking.frame + 1 < WALKING_ANIM_LEN {
 			if world.player.belt {
 				world.player.sprite = get_walking_sprite(0)
 			} else {
 				world.player.sprite = get_walking_sprite(world.player.walking.frame + 1)
 			}
-		}
 
-		world.player.walking.timer += 1
+			world.player.walking.timer += 1
+		} else {
+			world.player.walking.state = false
+			world.player.walking.timer = 0
+			world.player.walking.frame = 0
+			move_player_to_tile(world.player.direction)
+		}
 	case world.player.idle.state:
 		world.player.idle.frame = world.player.idle.timer / IDLE_ANIM_FRAME_LEN
 
@@ -2286,7 +1800,7 @@ update_game :: proc() {
 		world.player.sprite = idle_animation[world.player.idle.frame]
 
 		world.player.idle.timer += 1
-	case !world.level.ended:
+	case !world_level.ended:
 		world.player.sprite = get_walking_sprite(0)
 
 		if world.player.idle.timer > IDLING_TIME {
@@ -2296,13 +1810,13 @@ update_game :: proc() {
 		world.player.idle.timer += 1
 	}
 
-	world.level.animation.frame = world.level.animation.timer / LEVEL_ANIM_FRAME_LEN
-	world.level.animation.frame %= len(end_animation) // all persistent animations have the same amount of frames
-	world.level.animation.timer += 1
+	world_level.animation.frame = world_level.animation.timer / LEVEL_ANIM_FRAME_LEN
+	world_level.animation.frame %= len(end_animation) // all persistent animations have the same amount of frames
+	world_level.animation.timer += 1
 
 	// belts
 	if world.player.belt {
-		tile := get_tile_from_pos(world.player, world.level)
+		tile := get_tile_from_pos(world.player, world_level)
 		#partial switch tile {
 		case .Belt_Left:  move_player(.Left)
 		case .Belt_Right: move_player(.Right)
@@ -2312,8 +1826,8 @@ update_game :: proc() {
 	}
 
 	// track level time
-	if !world.level.ended {
-		world.level.score.time += sync.atomic_load(&global_state.tick_time)
+	if !world_level.ended {
+		world_level.score.time += sync.atomic_load(&global_state.tick_time)
 	}
 }
 
@@ -2343,8 +1857,8 @@ update_world :: proc(t: ^thread.Thread) {
 		start_tick := time.tick_now()
 
 		{
-			sync.guard(&world.lock)
-			defer sync.atomic_store(&world.updated, true)
+			sync.guard(&world_lock)
+			defer sync.atomic_store(&world_updated, true)
 
 			{ // keyboard inputs
 				sync.guard(&global_state.keyboard.lock)
@@ -2565,6 +2079,10 @@ _main :: proc(allocator: runtime.Allocator) {
 			spl.display_pixels(&window, canvas.pixels, canvas.size, {{off_x, off_y}, {buf_w, buf_h}})
 		}
 	}
+
+	sync.atomic_store(&global_state.finish_rendering, true)
+
+	for do if sync.atomic_load(&global_state.finished_rendering) do break
 
 	// NOTE: this will only trigger on a proper quit, not on task termination
 	{

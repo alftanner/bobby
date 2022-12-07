@@ -6,7 +6,6 @@ import win32 "core:sys/windows"
 
 Window_OS_Specific :: struct {
 	id: win32.HWND,
-	rc: win32.HGLRC,
 	icon: win32.HICON,
 	main_fiber, message_fiber: rawptr,
 	last_event: Event,
