@@ -627,8 +627,8 @@ get_intro_alpha :: proc(intro: Animation, frame_delta: f32) -> u8 {
 }
 
 interpolate_tile_position :: #force_inline proc(p: Player, frame_delta: f32) -> [2]f32 {
-	if p.walking.timer != 0 {
-		ANIM_TIME :: f32(WALKING_ANIM_FRAME_LEN * WALKING_ANIM_LEN) - 1
+	if p.walking.state || p.walking.timer != 0 {
+		ANIM_TIME :: f32(WALKING_ANIM_FRAME_LEN * WALKING_ANIM_LEN)
 		delta := (f32(p.walking.timer) + frame_delta) / ANIM_TIME
 		// even if frame was too long after the tick, we don't want to overextend the position any further than it can normally be
 		delta = min(delta, 1)
