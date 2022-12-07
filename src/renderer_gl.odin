@@ -107,7 +107,7 @@ render_gl :: proc(timer: ^spl.Timer) {
 		player_pos: [2]f32
 		frame_delta := get_frame_delta(previous_tick, tick_time)
 		@static prev_player_delta: f32
-		if local_world.scene == .Pause_Menu || local_world.player.walking.timer != 0 {
+		if local_world.scene == .Pause_Menu || (local_world.player.walking.state && local_world.player.dying.state) {
 			frame_delta = prev_player_delta
 		} else {
 			prev_player_delta = frame_delta
