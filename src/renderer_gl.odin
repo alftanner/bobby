@@ -11,37 +11,18 @@ import "core:container/small_array"
 import "spl"
 import "spl/gl"
 
-textures_index: [Textures]u32
-/*
-Which state is there to track?
-Vertices
-Texture coordinates
-Colors
-Texture (only 1)
-Viewport (only 1)
-
-If any of the (only 1) states change - one needs to draw previous vertices, and change the state accordingly
-
-Alternatively one can keep all of the frame state, then do a gl_draw() call which will do the same thing by going over all of the states
-That needs more memory, doesn't it? Should be ok though.
-
-
-Draw_Entry :: struct {
-	texture_id: u32,
-	vertex: [2]f32,
-	tex_coord: [2]f32,
-	color: image.RGBA_Color,
-}
-*/
-
 GL_State :: struct {
 	texture: int,
-	color: image.RGBA_Pixel,
 	viewport: [4]int,
 	scale: f32,
-	drawing: bool,
+
+	vertices: [dynamic][2]f32,
+	tex_coords: [dynamic][2]f32,
+	colors: [dynamic]image.RGBA_Pixel,
 }
 gl_state: GL_State
+
+textures_index: [Textures]u32
 
 gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	// local world state
@@ -63,6 +44,10 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 
 		gl.Enable(gl.BLEND)
 		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+		gl.EnableClientState(gl.VERTEX_ARRAY)
+		gl.EnableClientState(gl.TEXTURE_COORD_ARRAY)
+		gl.EnableClientState(gl.COLOR_ARRAY)
 
 		for _, tex in &textures {
 			gl_register_texture(tex)
@@ -336,8 +321,7 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		gl_draw_stats()
 	}
 
-	gl_end_drawing()
-	//gl_draw()
+	gl_draw()
 
 	sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
@@ -355,22 +339,11 @@ gl_render_finish :: proc() {
 	gl.deinit(&window)
 }
 
-gl_end_drawing :: proc() {
-	if gl_state.drawing {
-		gl.End()
-		gl_state.drawing = false
-	}
-}
-
 gl_set_viewport :: #force_inline proc(viewport: [4]int, scale: f32) {
 	if gl_state.viewport == viewport && gl_state.scale == scale do return
-	if gl_state.drawing {
-		gl.End()
-	}
+
+	gl_draw()
 	gl.Viewport(i32(viewport[0]), i32(viewport[1]), i32(viewport[2]), i32(viewport[3]))
-	if gl_state.drawing {
-		gl.Begin(gl.TRIANGLES)
-	}
 	gl_state.viewport = viewport
 	gl_state.scale = scale
 }
@@ -384,24 +357,26 @@ gl_register_texture :: #force_inline proc(t: Textures) {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 }
 
-gl_draw_text :: #force_inline proc(
-	font: Font,
-	text: string,
-	pos: [2]int,
-	color: image.RGB_Pixel = {255, 255, 255},
-	shadow_color: image.RGB_Pixel = {0, 0, 0},
-) {
-	measure_or_draw_text(.GL, nil, font, text, pos, color, shadow_color)
+gl_draw :: proc() {
+	if len(gl_state.vertices) == 0 do return
+
+	if len(gl_state.tex_coords) > 0 {
+		gl.TexCoordPointer(2, gl.FLOAT, 0, raw_data(gl_state.tex_coords))
+	}
+	gl.VertexPointer(2, gl.FLOAT, 0, raw_data(gl_state.vertices))
+	gl.ColorPointer(4, gl.UNSIGNED_BYTE, 0, raw_data(gl_state.colors))
+	gl.DrawArrays(gl.TRIANGLES, 0, auto_cast len(gl_state.colors))
+
+	clear(&gl_state.colors)
+	clear(&gl_state.vertices)
+	clear(&gl_state.tex_coords)
 }
 
 gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}) {
 	color := image.RGBA_Pixel{mod.r, mod.g, mod.b, 255}
 
 	if gl_state.texture != auto_cast textures_index[tex] {
-		if gl_state.drawing {
-			gl.End()
-			gl_state.drawing = false
-		}
+		gl_draw()
 
 		if gl_state.texture < 1 {
 			gl.Enable(gl.TEXTURE_2D)
@@ -412,105 +387,104 @@ gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: b
 		gl_state.texture = auto_cast textures_index[tex]
 	}
 
-	if !gl_state.drawing {
-		gl.Begin(gl.TRIANGLES)
-		gl_state.drawing = true
-	}
-
-	if gl_state.color != color {
-		gl.Color4ub(expand_to_tuple(color))
-		gl_state.color = color
-	}
-
 	src := textures[tex]
 
 	canvas_w := f32(gl_state.viewport[2]) / f32(gl_state.scale)
 	canvas_h := f32(gl_state.viewport[3]) / f32(gl_state.scale)
 
-	src_left := f32(src_rect.x) / f32(src.size[0])
-	src_right := f32(src_rect.x + src_rect.size[0]) / f32(src.size[0])
-	src_top := f32(src_rect.y) / f32(src.size[1])
-	src_bottom := f32(src_rect.y + src_rect.size[1]) / f32(src.size[1])
+	crd_left := f32(src_rect.x) / f32(src.size[0])
+	crd_right := f32(src_rect.x + src_rect.size[0]) / f32(src.size[0])
+	crd_top := f32(src_rect.y) / f32(src.size[1])
+	crd_bottom := f32(src_rect.y + src_rect.size[1]) / f32(src.size[1])
 
-	dst_left := f32(pos.x) / canvas_w
-	dst_right := f32(pos.x + src_rect.size[0]) / canvas_w
-	dst_top := f32(pos.y) / canvas_h
-	dst_bottom := f32(pos.y + src_rect.size[1]) / canvas_h
+	vrt_left := f32(pos.x) / canvas_w
+	vrt_right := f32(pos.x + src_rect.size[0]) / canvas_w
+	vrt_top := f32(pos.y) / canvas_h
+	vrt_bottom := f32(pos.y + src_rect.size[1]) / canvas_h
 
 	{ // normalize vertices
-		dst_left = (dst_left * 2) - 1
-		dst_right = (dst_right * 2) - 1
-		dst_top = (dst_top * -2) + 1
-		dst_bottom = (dst_bottom * -2) + 1
+		vrt_left = (vrt_left * 2) - 1
+		vrt_right = (vrt_right * 2) - 1
+		vrt_top = (vrt_top * -2) + 1
+		vrt_bottom = (vrt_bottom * -2) + 1
 	}
 	if .Horizontal in flip {
-		dst_left, dst_right = dst_right, dst_left
+		vrt_left, vrt_right = vrt_right, vrt_left
 	}
 	if .Vertical in flip {
-		dst_top, dst_bottom = dst_bottom, dst_top
+		vrt_top, vrt_bottom = vrt_bottom, vrt_top
 	}
 
-	gl.TexCoord2f(src_left, src_top)
-	gl.Vertex2f(dst_left, dst_top)
-	gl.TexCoord2f(src_right, src_top)
-	gl.Vertex2f(dst_right, dst_top)
-	gl.TexCoord2f(src_right, src_bottom)
-	gl.Vertex2f(dst_right, dst_bottom)
+	tex_coords: [6][2]f32 = {
+		{crd_left, crd_top},
+		{crd_right, crd_top},
+		{crd_right, crd_bottom},
+		{crd_left, crd_top},
+		{crd_right, crd_bottom},
+		{crd_left, crd_bottom},
+	}
+	vertices: [6][2]f32 = {
+		{vrt_left, vrt_top},
+		{vrt_right, vrt_top},
+		{vrt_right, vrt_bottom},
+		{vrt_left, vrt_top},
+		{vrt_right, vrt_bottom},
+		{vrt_left, vrt_bottom},
+	}
 
-	gl.TexCoord2f(src_left, src_top)
-	gl.Vertex2f(dst_left, dst_top)
-	gl.TexCoord2f(src_right, src_bottom)
-	gl.Vertex2f(dst_right, dst_bottom)
-	gl.TexCoord2f(src_left, src_bottom)
-	gl.Vertex2f(dst_left, dst_bottom)
+	for i in 0..<6 {
+		append(&gl_state.tex_coords, tex_coords[i])
+		append(&gl_state.vertices, vertices[i])
+		append(&gl_state.colors, color)
+	}
 }
 
 gl_draw_rect :: proc(rect: Rect, color: image.RGBA_Pixel) {
 	if gl_state.texture != -1 {
-		if gl_state.drawing {
-			gl.End()
-			gl_state.drawing = false
-		}
+		gl_draw()
 
 		gl.Disable(gl.TEXTURE_2D)
 
 		gl_state.texture = -1
 	}
 
-	if !gl_state.drawing {
-		gl.Begin(gl.TRIANGLES)
-		gl_state.drawing = true
+	canvas_w := f32(gl_state.viewport[2]) / f32(gl_state.scale)
+	canvas_h := f32(gl_state.viewport[3]) / f32(gl_state.scale)
+
+	vrt_left := f32(rect.x) / canvas_w
+	vrt_right := f32(rect.x + rect.size[0]) / canvas_w
+	vrt_top := f32(rect.y) / canvas_h
+	vrt_bottom := f32(rect.y + rect.size[1]) / canvas_h
+
+	{ // normalize vertices
+		vrt_left = (vrt_left * 2) - 1
+		vrt_right = (vrt_right * 2) - 1
+		vrt_top = (vrt_top * -2) + 1
+		vrt_bottom = (vrt_bottom * -2) + 1
 	}
 
-	if gl_state.color != color {
-		gl.Color4ub(expand_to_tuple(color))
-		gl_state.color = color
+	vertices: [6][2]f32 = {
+		{vrt_left, vrt_top},
+		{vrt_right, vrt_top},
+		{vrt_right, vrt_bottom},
+		{vrt_left, vrt_top},
+		{vrt_right, vrt_bottom},
+		{vrt_left, vrt_bottom},
 	}
-
-	{
-		canvas_w := f32(gl_state.viewport[2]) / f32(gl_state.scale)
-		canvas_h := f32(gl_state.viewport[3]) / f32(gl_state.scale)
-
-		dst_left := f32(rect.x) / canvas_w
-		dst_right := f32(rect.x + rect.size[0]) / canvas_w
-		dst_top := f32(rect.y) / canvas_h
-		dst_bottom := f32(rect.y + rect.size[1]) / canvas_h
-
-		{ // normalize dst coordinates
-			dst_left = (dst_left * 2) - 1
-			dst_right = (dst_right * 2) - 1
-			dst_top = (dst_top * -2) + 1
-			dst_bottom = (dst_bottom * -2) + 1
-		}
-
-		gl.Vertex2f(dst_left, dst_top)
-		gl.Vertex2f(dst_right, dst_top)
-		gl.Vertex2f(dst_right, dst_bottom)
-
-		gl.Vertex2f(dst_left, dst_top)
-		gl.Vertex2f(dst_right, dst_bottom)
-		gl.Vertex2f(dst_left, dst_bottom)
+	for i in 0..<6 {
+		append(&gl_state.vertices, vertices[i])
+		append(&gl_state.colors, color)
 	}
+}
+
+gl_draw_text :: #force_inline proc(
+	font: Font,
+	text: string,
+	pos: [2]int,
+	color: image.RGB_Pixel = {255, 255, 255},
+	shadow_color: image.RGB_Pixel = {0, 0, 0},
+) {
+	measure_or_draw_text(.GL, nil, font, text, pos, color, shadow_color)
 }
 
 gl_draw_credits :: proc(language: Language) {
