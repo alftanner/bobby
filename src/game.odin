@@ -83,6 +83,8 @@ Textures :: enum {
 	Atlas,
 	Splashes,
 	Logo,
+	Grass,
+	Ground,
 }
 textures: [Textures]Texture2D
 
@@ -764,6 +766,8 @@ load_textures :: proc() {
 	textures[.Atlas] = load_texture(#load("../res/atlas.png"))
 	textures[.Splashes] = load_texture(#load("../res/splashes.png"))
 	textures[.Logo] = load_texture(#load("../res/logo.png"))
+	textures[.Grass] = load_texture(#load("../res/grass.png"))
+	textures[.Ground] = load_texture(#load("../res/ground.png"))
 
 	general_font.texture = &textures[.General_Font]
 	general_font.glyph_size = {5, 7}

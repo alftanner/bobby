@@ -39,11 +39,9 @@ render_software :: proc(timer: ^spl.Timer) {
 		scene_texture = texture_make(BUFFER_W, BUFFER_H)
 		for bg, c in &backgrounds {
 			bg = texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
-
-			sprite := sprites[.Grass if c == .Carrot_Harvest else .Ground]
 			for y in 0..=TILES_H do for x in 0..=TILES_W {
 				pos: [2]int = {x, y}
-				draw_from_texture_software(&bg, textures[.Atlas], pos * TILE_SIZE, sprite)
+				draw_from_texture_software(&bg, textures[.Grass if c == .Carrot_Harvest else .Ground], pos * TILE_SIZE, {{}, {TILE_SIZE, TILE_SIZE}})
 			}
 		}
 	}
@@ -166,11 +164,10 @@ render_software :: proc(timer: ^spl.Timer) {
 			lvl_offset.y = int(offset.y * TILE_SIZE)
 
 			if draw_world_background { // TODO: only draw needed parts, not the entire thing
-				bg_rect: Rect
-				bg_rect.pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
-				bg_rect.pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
-				bg_rect.size = backgrounds[.Carrot_Harvest].size - bg_rect.pos
-				draw_from_texture_software(&scene_texture, backgrounds[.Carrot_Harvest], {}, bg_rect)
+				bg_pos: [2]int
+				bg_pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
+				bg_pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
+				draw_from_texture_software(&scene_texture, backgrounds[.Carrot_Harvest], {}, {bg_pos, backgrounds[.Carrot_Harvest].size})
 			}
 			for _, idx in local_level.tiles {
 				pos: [2]int = {idx%local_level.size[0], idx/local_level.size[0]}

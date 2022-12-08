@@ -16,8 +16,6 @@ render_gl :: proc(timer: ^spl.Timer) {
 	@static local_world: World
 	@static local_level: Level
 	@static local_settings: Settings
-	// rendering stuff
-	@static backgrounds: [Campaign]Texture2D
 	// other state
 	@static previous_tick: time.Tick
 	@static tick_time: time.Duration
@@ -26,21 +24,6 @@ render_gl :: proc(timer: ^spl.Timer) {
 	@static init: bool
 	if !init {
 		init = true
-
-		for bg, c in &backgrounds {
-			bg = texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
-
-			sprite := sprites[.Grass if c == .Carrot_Harvest else .Ground]
-			for y in 0..=TILES_H do for x in 0..=TILES_W {
-				pos: [2]int = {x, y}
-				draw_from_texture_software(&bg, textures[.Atlas], pos * TILE_SIZE, sprite)
-			}
-		}
-	}
-
-	@static gl_init: bool
-	if !gl_init {
-		gl_init = true
 
 		ok := gl.init(&window, settings.vsync)
 		if !ok {
@@ -58,10 +41,6 @@ render_gl :: proc(timer: ^spl.Timer) {
 
 		for tex in &textures {
 			register_texture_gl(&tex)
-		}
-
-		for bg in &backgrounds {
-			register_texture_gl(&bg)
 		}
 	}
 
@@ -143,11 +122,10 @@ render_gl :: proc(timer: ^spl.Timer) {
 		lvl_offset.y = int(offset.y * TILE_SIZE)
 
 		if draw_world_background { // TODO: only draw needed parts, not the entire thing
-			bg_rect: Rect
-			bg_rect.pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
-			bg_rect.pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
-			bg_rect.size = backgrounds[.Carrot_Harvest].size - bg_rect.pos
-			draw_from_texture_gl(backgrounds[.Carrot_Harvest], {}, bg_rect)
+			bg_pos: [2]int
+			bg_pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
+			bg_pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
+			draw_from_texture_gl(textures[.Grass], {}, {bg_pos, CANVAS_SIZE})
 		}
 		for _, idx in local_level.tiles {
 			pos: [2]int = {idx%local_level.size[0], idx/local_level.size[0]}
@@ -297,7 +275,7 @@ render_gl :: proc(timer: ^spl.Timer) {
 			draw_text_gl(general_font, hint_str, {hint_x, pos.y})
 		}
 	case .Main_Menu, .Scoreboard:
-		draw_from_texture_gl(backgrounds[local_settings.campaign], {}, {{}, CANVAS_SIZE})
+		draw_from_texture_gl(textures[.Grass if local_settings.campaign == .Carrot_Harvest else .Ground], {}, {{}, CANVAS_SIZE})
 	case .Intro:
 		off := (CANVAS_SIZE - INTRO_SPLASH.size) / 2
 		draw_from_texture_gl(textures[.Splashes], off, INTRO_SPLASH)
