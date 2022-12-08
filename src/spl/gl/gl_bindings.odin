@@ -2,20 +2,21 @@ package gl
 
 import gl "vendor:OpenGL"
 
-Viewport      :: gl.Viewport
-ClearColor    :: gl.ClearColor
-Clear         :: gl.Clear
-Enable        :: gl.Enable
-Disable       :: gl.Disable
-BlendFunc     :: gl.BlendFunc
-Flush         :: gl.Flush
-Finish        :: gl.Finish
-BindTexture   :: gl.BindTexture
-GenTextures   :: gl.GenTextures
-TexParameteri :: gl.TexParameteri
-TexImage2D    :: gl.TexImage2D
-LineWidth     :: gl.LineWidth
-PolygonMode   :: gl.PolygonMode
+Viewport        :: gl.Viewport
+ClearColor      :: gl.ClearColor
+Clear           :: gl.Clear
+Enable          :: gl.Enable
+Disable         :: gl.Disable
+BlendFunc       :: gl.BlendFunc
+Flush           :: gl.Flush
+Finish          :: gl.Finish
+BindTexture     :: gl.BindTexture
+GenTextures     :: gl.GenTextures
+TexParameteri   :: gl.TexParameteri
+TexImage2D      :: gl.TexImage2D
+LineWidth       :: gl.LineWidth
+PolygonMode     :: gl.PolygonMode
+DrawArrays      :: gl.DrawArrays
 
 /* MatrixMode */
 MODELVIEW  :: gl.MODELVIEW

@@ -11,7 +11,17 @@ import "core:container/small_array"
 import "spl"
 import "spl/gl"
 
-render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
+textures_index: [Textures]u32
+/*
+Draw_Entry :: struct {
+	texture_id: u32,
+	vertex: [2]f32,
+	tex_coord: [2]f32,
+	mod: image.RGB_Color,
+	color: image.RGBA_Color,
+}
+*/
+gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	// local world state
 	@static local_world: World
 	@static local_level: Level
@@ -32,12 +42,8 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 		gl.Enable(gl.BLEND)
 		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
-		// TODO: this is needed?
-		gl.Enable(gl.ALPHA_TEST)
-		gl.AlphaFunc(gl.GREATER, 0)
-
-		for tex in &textures {
-			register_texture_gl(&tex)
+		for _, tex in &textures {
+			gl_register_texture(tex)
 		}
 	}
 
@@ -61,7 +67,7 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 		buf_size := CANVAS_SIZE * scale
 		off_x := (int(client_size[0]) - buf_size[0]) / 2
 		off_y := (int(client_size[1]) - buf_size[1]) / 2
-		set_viewport_gl({off_x, off_y, buf_size[0], buf_size[1]}, f32(scale))
+		gl_set_viewport({off_x, off_y, buf_size[0], buf_size[1]}, f32(scale))
 	}
 
 	gl.ClearColor(0, 0, 0, 1)
@@ -122,12 +128,12 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 			bg_pos: [2]int
 			bg_pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
 			bg_pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
-			draw_from_texture_gl(textures[.Grass], {}, {bg_pos, CANVAS_SIZE})
+			gl_draw_from_texture({}, .Grass, {bg_pos, CANVAS_SIZE})
 		}
 		for _, idx in local_level.tiles {
 			pos: [2]int = {idx%local_level.size[0], idx/local_level.size[0]}
 			sprite := get_sprite_from_pos(pos, local_level)
-			draw_from_texture_gl(textures[.Atlas], (pos * TILE_SIZE) + lvl_offset, sprite)
+			gl_draw_from_texture((pos * TILE_SIZE) + lvl_offset, .Atlas, sprite)
 		}
 
 		// draw player
@@ -135,7 +141,7 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 			pos := (player_pos + offset) * TILE_SIZE
 			px := int(pos.x) + local_world.player.sprite.offset.x
 			py := int(pos.y) + local_world.player.sprite.offset.y
-			draw_from_texture_gl(textures[.Atlas], {px, py}, local_world.player.sprite)
+			gl_draw_from_texture({px, py}, .Atlas, local_world.player.sprite)
 		}
 
 		// HUD
@@ -148,7 +154,7 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 					int(time.duration_minutes(local_level.score.time)),
 					int(time.duration_seconds(local_level.score.time)) % 60,
 				)
-				draw_text_gl(hud_font, time_str, {2, 2})
+				gl_draw_text(hud_font, time_str, {2, 2})
 			}
 			// level begin screen
 			if time.duration_seconds(local_level.score.time) < 2 {
@@ -156,7 +162,7 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 				level_str := fmt.bprintf(tbuf[:], "{} {}", language_strings[local_settings.language][.Level], local_level.current + 1)
 				size := measure_text(general_font, level_str)
 				pos := (CANVAS_SIZE - size) / 2
-				draw_text_gl(general_font, level_str, pos)
+				gl_draw_text(general_font, level_str, pos)
 			}
 			// right part
 			{
@@ -165,7 +171,7 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 				if local_level.carrots > 0 {
 					sprite := hud_sprites[.Carrot]
 					pos.x -= sprite.size[0]
-					draw_from_texture_gl(textures[.Atlas], pos, sprite)
+					gl_draw_from_texture(pos, .Atlas, sprite)
 					pos.x -= 2
 
 					tbuf: [8]byte
@@ -174,7 +180,7 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 						size := measure_text(hud_font, str)
 						pos.x -= size[0]
 					}
-					draw_text_gl(hud_font, str, {pos.x, pos.y + 3})
+					gl_draw_text(hud_font, str, {pos.x, pos.y + 3})
 					pos.y += sprite.size[1] + 2
 					pos.x = CANVAS_SIZE[0] - 2
 				}
@@ -182,7 +188,7 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 				if local_level.eggs > 0 {
 					sprite := hud_sprites[.Egg]
 					pos.x -= sprite.size[0]
-					draw_from_texture_gl(textures[.Atlas], pos, sprite)
+					gl_draw_from_texture(pos, .Atlas, sprite)
 					pos.x -= 2
 
 					tbuf: [8]byte
@@ -191,7 +197,7 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 						size := measure_text(hud_font, str)
 						pos.x -= size[0]
 					}
-					draw_text_gl(hud_font, str, {pos.x, pos.y + 3})
+					gl_draw_text(hud_font, str, {pos.x, pos.y + 3})
 					pos.y += sprite.size[1] + 2
 					pos.x = CANVAS_SIZE[0] - 2
 				}
@@ -199,19 +205,19 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 				if local_world.player.silver_key {
 					sprite := hud_sprites[.Silver_Key]
 					pos.x -= sprite.size[0]
-					draw_from_texture_gl(textures[.Atlas], pos, sprite)
+					gl_draw_from_texture(pos, .Atlas, sprite)
 					pos.x -= 2
 				}
 				if local_world.player.golden_key {
 					sprite := hud_sprites[.Golden_Key]
 					pos.x -= sprite.size[0]
-					draw_from_texture_gl(textures[.Atlas], pos, sprite)
+					gl_draw_from_texture(pos, .Atlas, sprite)
 					pos.x -= 2
 				}
 				if local_world.player.copper_key {
 					sprite := hud_sprites[.Copper_Key]
 					pos.x -= sprite.size[0]
-					draw_from_texture_gl(textures[.Atlas], pos, sprite)
+					gl_draw_from_texture(pos, .Atlas, sprite)
 					pos.x -= 2
 				}
 			}
@@ -260,52 +266,52 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 			pos: [2]int
 			pos.x = (CANVAS_SIZE[0] - success.size[0]) / 2
 			pos.y = (CANVAS_SIZE[1] - total_h) / 2
-			draw_from_texture_gl(textures[.Atlas], pos, success)
+			gl_draw_from_texture(pos, .Atlas, success)
 			pos.y += success.size[1] + (general_font.glyph_size[1] * 2)
 
-			draw_text_gl(general_font, time_str, {time_x, pos.y})
+			gl_draw_text(general_font, time_str, {time_x, pos.y})
 			pos.y += time_h + general_font.glyph_size[1]
 
-			draw_text_gl(general_font, steps_str, {steps_x, pos.y})
+			gl_draw_text(general_font, steps_str, {steps_x, pos.y})
 			pos.y += steps_h + (general_font.glyph_size[1] * 2)
 
-			draw_text_gl(general_font, hint_str, {hint_x, pos.y})
+			gl_draw_text(general_font, hint_str, {hint_x, pos.y})
 		}
 	case .Main_Menu, .Scoreboard:
-		draw_from_texture_gl(textures[.Grass if local_settings.campaign == .Carrot_Harvest else .Ground], {}, {{}, CANVAS_SIZE})
+		gl_draw_from_texture({}, .Grass if local_settings.campaign == .Carrot_Harvest else .Ground, {{}, CANVAS_SIZE})
 	case .Intro:
 		off := (CANVAS_SIZE - INTRO_SPLASH.size) / 2
-		draw_from_texture_gl(textures[.Splashes], off, INTRO_SPLASH)
+		gl_draw_from_texture(off, .Splashes, INTRO_SPLASH)
 		intro_alpha := get_intro_alpha(local_world.intro, get_frame_delta(previous_tick, tick_time))
-		draw_rect_gl({off, INTRO_SPLASH.size}, {0, 0, 0, intro_alpha})
+		gl_draw_rect({off, INTRO_SPLASH.size}, {0, 0, 0, intro_alpha})
 	case .End:
 		off := (CANVAS_SIZE - END_SPLASH.size) / 2
-		draw_from_texture_gl(textures[.Splashes], off, END_SPLASH)
+		gl_draw_from_texture(off, .Splashes, END_SPLASH)
 	case .Credits:
-		draw_credits_gl(local_settings.language)
+		gl_draw_credits(local_settings.language)
 	}
 
 	#partial switch local_world.scene {
 	case .Pause_Menu, .Main_Menu, .Scoreboard:
-		draw_rect_gl({{}, CANVAS_SIZE}, {0, 0, 0, 0xAA})
+		gl_draw_rect({{}, CANVAS_SIZE}, {0, 0, 0, 0xAA})
 	}
 
 	#partial switch local_world.scene {
 	case .Main_Menu, .Pause_Menu:
-		draw_menu_gl(small_array.slice(&local_world.menu_options), local_world.selected_option)
+		gl_draw_menu(small_array.slice(&local_world.menu_options), local_world.selected_option)
 	case .Scoreboard:
-		draw_scoreboard_gl(small_array.slice(&local_world.scoreboard), local_world.scoreboard_page)
+		gl_draw_scoreboard(small_array.slice(&local_world.scoreboard), local_world.scoreboard_page)
 	}
 
 	fade_alpha := get_fade_alpha(local_world.fade, get_frame_delta(previous_tick, tick_time))
 	if fade_alpha != 0 {
-		draw_rect_gl({{}, CANVAS_SIZE}, {0, 0, 0, fade_alpha})
+		gl_draw_rect({{}, CANVAS_SIZE}, {0, 0, 0, fade_alpha})
 	}
 
 	if local_settings.show_stats {
 		calculate_stats()
-		set_viewport_gl({0, 0, int(client_size[0]), int(client_size[1])}, f32(scale))
-		draw_stats_gl()
+		gl_set_viewport({0, 0, int(client_size[0]), int(client_size[1])}, f32(scale))
+		gl_draw_stats()
 	}
 
 	sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
@@ -320,26 +326,26 @@ render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 	sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 }
 
-render_gl_finish :: proc() {
+gl_render_finish :: proc() {
 	gl.deinit(&window)
 }
 
-set_viewport_gl :: #force_inline proc(viewport: [4]int, scale: f32) {
+gl_set_viewport :: #force_inline proc(viewport: [4]int, scale: f32) {
 	global_state.viewport = viewport
 	gl.Viewport(i32(viewport[0]), i32(viewport[1]), i32(viewport[2]), i32(viewport[3]))
 	global_state.rendering_scale = scale
 }
 
-register_texture_gl :: #force_inline proc(t: ^Texture2D) {
+gl_register_texture :: #force_inline proc(t: Textures) {
 	gl.Enable(gl.TEXTURE_2D)
-	gl.GenTextures(1, &t.index)
-	gl.BindTexture(gl.TEXTURE_2D, t.index)
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, i32(t.size[0]), i32(t.size[1]), 0, gl.BGRA_EXT, gl.UNSIGNED_BYTE, raw_data(t.pixels))
+	gl.GenTextures(1, &textures_index[t])
+	gl.BindTexture(gl.TEXTURE_2D, textures_index[t])
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, i32(textures[t].size[0]), i32(textures[t].size[1]), 0, gl.BGRA_EXT, gl.UNSIGNED_BYTE, raw_data(textures[t].pixels))
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 }
 
-draw_text_gl :: #force_inline proc(
+gl_draw_text :: #force_inline proc(
 	font: Font,
 	text: string,
 	pos: [2]int,
@@ -347,7 +353,7 @@ draw_text_gl :: #force_inline proc(
 	shadow_color: image.RGB_Pixel = {0, 0, 0},
 ) {
 	gl.Enable(gl.TEXTURE_2D)
-	gl.BindTexture(gl.TEXTURE_2D, font.texture.index)
+	gl.BindTexture(gl.TEXTURE_2D, textures_index[font.texture])
 
 	gl.Begin(gl.TRIANGLES)
 	defer gl.End()
@@ -355,7 +361,8 @@ draw_text_gl :: #force_inline proc(
 	measure_or_draw_text(.GL, nil, font, text, pos, color, shadow_color)
 }
 
-draw_from_texture_gl :: proc(src: Texture2D, pos: [2]int, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}, bind := true) {
+gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}, bind := true) {
+	src := textures[tex]
 	needs_mod := mod != {255, 255, 255}
 
 	if needs_mod {
@@ -367,7 +374,7 @@ draw_from_texture_gl :: proc(src: Texture2D, pos: [2]int, src_rect: Rect, flip: 
 
 	if bind {
 		gl.Enable(gl.TEXTURE_2D)
-		gl.BindTexture(gl.TEXTURE_2D, src.index)
+		gl.BindTexture(gl.TEXTURE_2D, textures_index[tex])
 		gl.Begin(gl.TRIANGLES)
 	}
 	defer if bind {
@@ -387,7 +394,7 @@ draw_from_texture_gl :: proc(src: Texture2D, pos: [2]int, src_rect: Rect, flip: 
 	dst_top := f32(pos.y) / canvas_h
 	dst_bottom := f32(pos.y + src_rect.size[1]) / canvas_h
 
-	{ // normalize dst coordinates
+	{ // normalize vertices
 		dst_left = (dst_left * 2) - 1
 		dst_right = (dst_right * 2) - 1
 		dst_top = (dst_top * -2) + 1
@@ -415,7 +422,7 @@ draw_from_texture_gl :: proc(src: Texture2D, pos: [2]int, src_rect: Rect, flip: 
 	gl.Vertex2f(dst_left, dst_bottom)
 }
 
-draw_rect_gl :: proc(rect: Rect, col: image.RGBA_Pixel, filled: bool = true) {
+gl_draw_rect :: proc(rect: Rect, col: image.RGBA_Pixel, filled: bool = true) {
 	gl.Disable(gl.TEXTURE_2D)
 
 	gl.Color4ub(expand_to_tuple(col))
@@ -450,7 +457,7 @@ draw_rect_gl :: proc(rect: Rect, col: image.RGBA_Pixel, filled: bool = true) {
 	}
 }
 
-draw_credits_gl :: proc(language: Language) {
+gl_draw_credits :: proc(language: Language) {
 	str := language_strings[language][.Credits_Original]
 	str2 := language_strings[language][.Credits_Remastered]
 
@@ -459,14 +466,14 @@ draw_credits_gl :: proc(language: Language) {
 	size_h := str_size[1] + general_font.glyph_size[1] + textures[.Logo].size[1] + general_font.glyph_size[1] + str2_size[1]
 	off_y := (CANVAS_SIZE[1] - size_h) / 2
 
-	draw_text_gl(general_font, str, {(CANVAS_SIZE[0] - str_size[0]) / 2, off_y})
+	gl_draw_text(general_font, str, {(CANVAS_SIZE[0] - str_size[0]) / 2, off_y})
 	off_y += str_size[1] + general_font.glyph_size[1]
-	draw_from_texture_gl(textures[.Logo], {(CANVAS_SIZE[0] - textures[.Logo].size[0]) / 2, off_y}, {{}, textures[.Logo].size})
+	gl_draw_from_texture({(CANVAS_SIZE[0] - textures[.Logo].size[0]) / 2, off_y}, .Logo, {{}, textures[.Logo].size})
 	off_y += textures[.Logo].size[1] + general_font.glyph_size[1]
-	draw_text_gl(general_font, str2, {(CANVAS_SIZE[0] - str2_size[0]) / 2, off_y})
+	gl_draw_text(general_font, str2, {(CANVAS_SIZE[0] - str2_size[0]) / 2, off_y})
 }
 
-draw_menu_gl :: proc(options: []Menu_Option, selected: int) {
+gl_draw_menu :: proc(options: []Menu_Option, selected: int) {
 	DISABLED :: image.RGB_Pixel{75, 75, 75}
 	NORMAL :: image.RGB_Pixel{145, 145, 145}
 	SELECTED :: image.RGB_Pixel{255, 255, 255}
@@ -486,11 +493,11 @@ draw_menu_gl :: proc(options: []Menu_Option, selected: int) {
 			if !option.arrows.?[0].enabled {
 				color = DISABLED
 			}
-			draw_from_texture_gl(textures[.Atlas], {x, option.y - 1}, RIGHT_ARROW, {.Horizontal}, color)
+			gl_draw_from_texture({x, option.y - 1}, .Atlas, RIGHT_ARROW, {.Horizontal}, color)
 			x += RIGHT_ARROW.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT
 		}
 
-		draw_text_gl(general_font, text, {x, option.y}, color)
+		gl_draw_text(general_font, text, {x, option.y}, color)
 
 		if option.arrows != nil {
 			color := color
@@ -498,12 +505,12 @@ draw_menu_gl :: proc(options: []Menu_Option, selected: int) {
 				color = DISABLED
 			}
 			x += option.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT
-			draw_from_texture_gl(textures[.Atlas], {x, option.y - 1}, RIGHT_ARROW, {}, color)
+			gl_draw_from_texture({x, option.y - 1}, .Atlas, RIGHT_ARROW, {}, color)
 		}
 	}
 }
 
-draw_scoreboard_gl :: proc(labels: []Text_Label, page: int) {
+gl_draw_scoreboard :: proc(labels: []Text_Label, page: int) {
 	if len(labels) == 0 do return
 
 	DISABLED :: image.RGB_Pixel{75, 75, 75}
@@ -535,7 +542,7 @@ draw_scoreboard_gl :: proc(labels: []Text_Label, page: int) {
 		text_buf := label.text_buf
 		text := string(text_buf[:label.text_len])
 
-		draw_text_gl(general_font, text, region.pos, SELECTED)
+		gl_draw_text(general_font, text, region.pos, SELECTED)
 
 		y += region.size[1] + general_font.glyph_size[1]
 	}
@@ -545,18 +552,18 @@ draw_scoreboard_gl :: proc(labels: []Text_Label, page: int) {
 		if page == 0 {
 			color = DISABLED
 		}
-		draw_from_texture_gl(textures[.Atlas], up_arrow.pos, UP_ARROW, {}, color)
+		gl_draw_from_texture(up_arrow.pos, .Atlas, UP_ARROW, {}, color)
 	}
 	{
 		color := SELECTED
 		if page == pages - 1 {
 			color = DISABLED
 		}
-		draw_from_texture_gl(textures[.Atlas], down_arrow.pos, UP_ARROW, {.Vertical}, color)
+		gl_draw_from_texture(down_arrow.pos, .Atlas, UP_ARROW, {.Vertical}, color)
 	}
 }
 
-draw_stats_gl :: proc() {
+gl_draw_stats :: proc() {
 	tbuf: [256]byte
 	text := fmt.bprintf(
 		tbuf[:],
@@ -571,5 +578,5 @@ draw_stats_gl :: proc() {
 	pos.x = int(f32(viewport_size[0]) / global_state.rendering_scale) - 2
 	pos.y = int(f32(viewport_size[1]) / global_state.rendering_scale) - 2
 	pos -= measure_text(general_font, text)
-	draw_text_gl(general_font, text, pos)
+	gl_draw_text(general_font, text, pos)
 }

@@ -5,13 +5,13 @@ import "core:image"
 
 import "spl"
 
-WHITE  := color({255, 255, 255, 255})
-BLACK  := color({0,   0,   0,   255})
-RED    := color({237, 28,  36,  255})
-GREEN  := color({28,  237, 36,  255})
-BLUE   := color({63,  72,  204, 255})
-YELLOW := color({255, 255, 72,  255})
-ORANGE := color({255, 127, 39,  255})
+WHITE  := platform_color({255, 255, 255, 255})
+BLACK  := platform_color({0,   0,   0,   255})
+RED    := platform_color({237, 28,  36,  255})
+GREEN  := platform_color({28,  237, 36,  255})
+BLUE   := platform_color({63,  72,  204, 255})
+YELLOW := platform_color({255, 255, 72,  255})
+ORANGE := platform_color({255, 127, 39,  255})
 
 Flip :: enum {
 	Horizontal,
@@ -26,7 +26,6 @@ Texture2D :: struct {
 	pixels: []Color,
 	size: [2]int,
 	allocator: mem.Allocator,
-	index: u32,
 }
 
 texture_make :: proc(w, h: int, allocator := context.allocator) -> (t: Texture2D) {
@@ -41,7 +40,7 @@ texture_destroy :: proc(t: ^Texture2D) {
 	t^ = {}
 }
 
-color :: #force_inline proc(p: image.RGBA_Pixel) -> Color {
+platform_color :: #force_inline proc(p: image.RGBA_Pixel) -> Color {
 	when ODIN_OS == .Windows {
 		return p.bgra
 	} else {

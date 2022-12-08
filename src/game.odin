@@ -21,8 +21,8 @@ GAME_TITLE :: "Bobby Carrot Remastered"
 TIMER_FAIL :: "Failed to create a timer. I would use sleep() instead, but @mmozeiko said that sleeping is bad."
 
 Renderer :: enum {
-	Software,
 	GL,
+	Software,
 }
 
 Score :: struct {
@@ -48,7 +48,6 @@ Settings :: struct {
 default_settings: Settings : {
 	fps = 30,
 	vsync = true,
-	renderer = .GL,
 }
 settings: Settings = default_settings
 
@@ -70,14 +69,6 @@ DEFAULT_SCALE :: 3
 WINDOW_W :: BUFFER_W * DEFAULT_SCALE
 WINDOW_H :: BUFFER_H * DEFAULT_SCALE
 
-Font :: struct {
-	using texture: ^Texture2D,
-	table: map[rune][2]int,
-	glyph_size: [2]int,
-}
-general_font: Font
-hud_font: Font
-
 Textures :: enum {
 	General_Font,
 	Atlas,
@@ -87,6 +78,18 @@ Textures :: enum {
 	Ground,
 }
 textures: [Textures]Texture2D
+manu_campaign_textures: [Campaign]Textures = {
+	.Carrot_Harvest = .Grass,
+	.Easter_Eggs = .Ground,
+}
+
+Font :: struct {
+	texture: Textures,
+	table: map[rune][2]int,
+	glyph_size: [2]int,
+}
+general_font: Font
+hud_font: Font
 
 Direction :: enum {
 	None,
@@ -206,6 +209,7 @@ Keyboard_State :: struct {
 State :: struct {
 	// TODO: i128 with atomic_load/store
 	client_size: i64,
+
 	viewport: [4]int,
 	rendering_scale: f32,
 
@@ -543,11 +547,11 @@ measure_or_draw_text :: proc(
 		if !no_draw {
 			switch renderer {
 			case .Software:
-				draw_from_texture_software(t, font.texture^, pos + 1, {glyph_pos, font.glyph_size}, {}, shadow_color)
-				draw_from_texture_software(t, font.texture^, pos, {glyph_pos, font.glyph_size}, {}, color)
+				software_draw_from_texture(t, pos + 1, textures[font.texture], {glyph_pos, font.glyph_size}, {}, shadow_color)
+				software_draw_from_texture(t, pos, textures[font.texture], {glyph_pos, font.glyph_size}, {}, color)
 			case .GL:
-				draw_from_texture_gl(font.texture^, pos + 1, {glyph_pos, font.glyph_size}, {}, shadow_color, false)
-				draw_from_texture_gl(font.texture^, pos, {glyph_pos, font.glyph_size}, {}, color, false)
+				gl_draw_from_texture(pos + 1, font.texture, {glyph_pos, font.glyph_size}, {}, shadow_color, false)
+				gl_draw_from_texture(pos, font.texture, {glyph_pos, font.glyph_size}, {}, color, false)
 			}
 		}
 
@@ -630,7 +634,7 @@ get_intro_alpha :: proc(intro: Animation, frame_delta: f32) -> u8 {
 
 interpolate_tile_position :: #force_inline proc(p: Player, frame_delta: f32) -> [2]f32 {
 	if p.walking.state || p.walking.timer != 0 {
-		ANIM_TIME :: f32(WALKING_ANIM_FRAME_LEN * (WALKING_ANIM_LEN)) - 1
+		ANIM_TIME :: f32(WALKING_ANIM_FRAME_LEN * WALKING_ANIM_LEN) - 1
 		delta := (f32(p.walking.timer) + frame_delta) / ANIM_TIME
 		// even if frame was too long after the tick, we don't want to overextend the position any further than it can normally be
 		delta = min(delta, 1)
@@ -755,7 +759,7 @@ load_texture :: proc(data: []byte) -> (t: Texture2D) {
 
 	pixels := mem.slice_data_cast([]image.RGBA_Pixel, bytes.buffer_to_bytes(&img.pixels))
 	for p, i in pixels {
-		t.pixels[i] = color(p)
+		t.pixels[i] = platform_color(p)
 	}
 
 	return
@@ -769,20 +773,20 @@ load_textures :: proc() {
 	textures[.Grass] = load_texture(#load("../res/grass.png"))
 	textures[.Ground] = load_texture(#load("../res/ground.png"))
 
-	general_font.texture = &textures[.General_Font]
+	general_font.texture = .General_Font
 	general_font.glyph_size = {5, 7}
 	general_font.table = make(map[rune][2]int)
 	for ch in ` 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ?'".,:;~!@#$^&_|\/%*+-=<>()[]{}` {
 		glyph_idx := len(general_font.table)
-		gx := (glyph_idx % (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[0]
-		gy := (glyph_idx / (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[1]
+		gx := (glyph_idx % (textures[.General_Font].size[0] / general_font.glyph_size[0])) * general_font.glyph_size[0]
+		gy := (glyph_idx / (textures[.General_Font].size[0] / general_font.glyph_size[0])) * general_font.glyph_size[1]
 		general_font.table[ch] = {gx, gy}
 	}
 	when SUPPORT_LANGUAGES {
 		for ch in `бБвВгГґҐдДєЄжЖзЗиИїЇйЙкКлЛмнпПтуУфФцЦчЧшШщЩьЬюЮяЯ` {
 			glyph_idx := len(general_font.table)
-			gx := (glyph_idx % (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[0]
-			gy := (glyph_idx / (general_font.size[0] / general_font.glyph_size[0])) * general_font.glyph_size[1]
+			gx := (glyph_idx % (textures[.General_Font].size[0] / general_font.glyph_size[0])) * general_font.glyph_size[0]
+			gy := (glyph_idx / (textures[.General_Font].size[0] / general_font.glyph_size[0])) * general_font.glyph_size[1]
 			general_font.table[ch] = {gx, gy}
 		}
 		// Cyrillic from Latin equivalents
@@ -807,7 +811,7 @@ load_textures :: proc() {
 		general_font.table['Т'] = general_font.table['T']
 	}
 
-	hud_font.texture = &textures[.Atlas]
+	hud_font.texture = .Atlas
 	hud_font.glyph_size = {5, 8}
 	hud_font.table = make(map[rune][2]int)
 	for ch in `0123456789:?` {
@@ -847,14 +851,16 @@ copy_level :: proc(dst, src: ^Level, q: ^Tile_Queue) -> (changed: bool) {
 	dst.ended = src.ended
 	dst.score = src.score
 
-	for tile, idx in src.tiles {
-		old_tile := dst.tiles[idx]
-		dst.tiles[idx] = tile
+	if q == nil {
+		copy(dst.tiles, src.tiles)
+	} else {
+		for tile, idx in src.tiles {
+			old_tile := dst.tiles[idx]
+			dst.tiles[idx] = tile
 
-		if q == nil do continue
-
-		if old_tile != tile || tile in belt_tiles || (tile == .End && dst.can_end) {
-			small_array.push_back(q, idx)
+			if old_tile != tile || tile in belt_tiles || (tile == .End && dst.can_end) {
+				small_array.push_back(q, idx)
+			}
 		}
 	}
 
@@ -884,7 +890,7 @@ render :: proc(t: ^thread.Thread) {
 
 	finish_renderer := proc(r: Renderer) {
 		#partial switch r {
-		case .GL: render_gl_finish()
+		case .GL: gl_render_finish()
 		}
 	}
 
@@ -900,9 +906,9 @@ render :: proc(t: ^thread.Thread) {
 
 		switch renderer {
 		case .Software:
-			render_software(&timer, was_init[renderer])
+			software_render(&timer, was_init[renderer])
 		case .GL:
-			render_gl(&timer, was_init[renderer])
+			gl_render(&timer, was_init[renderer])
 		}
 		was_init[renderer] = true
 
@@ -1385,7 +1391,7 @@ show_main_menu :: proc() {
 
 	total_h += general_font.glyph_size[1]
 
-	{
+	if last_unlocked_level > 0 {
 		option: Menu_Option = {func = main_menu_select_level}
 		selected_level := settings.selected_levels[settings.campaign]
 		label_printf(&option, "{}: {}", language_strings[settings.language][.Select_Level], selected_level + 1)
@@ -1524,7 +1530,7 @@ show_main_menu :: proc() {
 
 	total_h += general_font.glyph_size[1]
 
-	// Manual?
+	// TODO: Manual?
 
 	{
 		option: Menu_Option = {func = main_menu_credits}
@@ -1587,7 +1593,7 @@ show_pause_menu :: proc(clear := true) {
 
 	total_h += general_font.glyph_size[1]
 
-	// Help?
+	// TODO: Help?
 
 	{
 		option: Menu_Option = {func = pause_menu_exit}
@@ -1767,8 +1773,6 @@ scoreboard_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 }
 
 game_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
-	shift := .Held in global_state.keyboard.keys[.LShift]
-
 	#partial switch key {
 	case .Right: move_player(.Right)
 	case .Left:  move_player(.Left)
@@ -1777,15 +1781,6 @@ game_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 	case .R:
 		if .Pressed in state {
 			restart_level()
-		}
-	case .F:
-		if !world.player.fading.state {
-			finish_level(world_level.current + (1 if !shift else -1))
-		}
-	case .S:
-		if !world.player.fading.state {
-			world_level.next += (1 if !shift else -1)
-			load_level()
 		}
 	case .Escape:
 		if .Pressed in state {
@@ -1797,6 +1792,21 @@ game_key_handler :: proc(key: spl.Key_Code, state: bit_set[Key_State]) {
 		if .Pressed in state {
 			if world_level.ended && !world.player.fading.state {
 				switch_scene(.Game)
+			}
+		}
+	}
+
+	when ODIN_DEBUG {
+		shift := .Held in global_state.keyboard.keys[.LShift]
+		#partial switch key {
+		case .F:
+			if !world.player.fading.state {
+				finish_level(world_level.current + (1 if !shift else -1))
+			}
+		case .S:
+			if !world.player.fading.state {
+				world_level.next += (1 if !shift else -1)
+				load_level()
 			}
 		}
 	}
@@ -1845,7 +1855,7 @@ update_game :: proc() {
 			if world.player.belt {
 				world.player.sprite = get_walking_sprite(0)
 			} else {
-				world.player.sprite = get_walking_sprite(world.player.walking.frame + 1)
+				world.	player.sprite = get_walking_sprite(world.player.walking.frame + 1)
 			}
 
 			world.player.walking.timer += 1
@@ -2052,14 +2062,13 @@ _main :: proc(allocator: runtime.Allocator) {
 	}
 
 	pos: [2]int
-	size: [2]int = {WINDOW_W, WINDOW_H}
+	window_size: [2]int = {WINDOW_W, WINDOW_H}
 	{ // center the window
-		wr := spl.get_working_area()
-		pos = wr.pos + ((wr.size / 2) - (size / 2))
+		area := spl.get_working_area()
+		pos = area.pos + ((area.size / 2) - (window_size / 2))
 	}
 
-	// Open window
-	assert(spl.create(&window, pos, size, GAME_TITLE, {.Hide_Cursor}), "Failed to create window")
+	assert(spl.create(&window, pos, window_size, GAME_TITLE), "Failed to create window")
 	defer spl.destroy(&window)
 
 	spl.set_resizable(&window, true)
@@ -2097,9 +2106,7 @@ _main :: proc(allocator: runtime.Allocator) {
 				sync.guard(&global_state.keyboard.lock)
 				for state in &global_state.keyboard.keys {
 					// release all pressed keys
-					if .Held in state {
-						state = {.Released}
-					}
+					if .Held in state do state = {.Released}
 				}
 			}
 		case spl.Draw_Event:
@@ -2118,27 +2125,18 @@ _main :: proc(allocator: runtime.Allocator) {
 				}
 				global_state.keyboard.keys[ev.key] = state
 			}
-
-			switch ev.state {
-			case .Repeated, .Released:
-			case .Pressed:
-				// TODO: remove these before release
-				#partial switch ev.key {
-				case .I: settings.show_stats = !settings.show_stats
-				case .B: settings = default_settings
+			when ODIN_DEBUG {
+				if ev.state == .Pressed {
+					#partial switch ev.key {
+					case .I: settings.show_stats = !settings.show_stats
+					}
 				}
 			}
 		case spl.Mouse_Button_Event:
 		case spl.Mouse_Move_Event:
 		case spl.Mouse_Wheel_Event:
 		case spl.User_Event:
-			canvas := (cast(^Texture2D)ev.data)^
-			client_size := get_from_i64(&global_state.client_size)
-			scale := get_buffer_scale(client_size[0], client_size[1])
-			buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
-			off_x := (cast(int)client_size[0] - buf_w) / 2
-			off_y := (cast(int)client_size[1] - buf_h) / 2
-			spl.display_pixels(&window, canvas.pixels, canvas.size, {{off_x, off_y}, {buf_w, buf_h}})
+			software_display(cast(^Texture2D)ev.data)
 		}
 	}
 
@@ -2155,9 +2153,3 @@ _main :: proc(allocator: runtime.Allocator) {
 		assert(ok, fmt.tprint("Unable to save the game"))
 	}
 }
-
-/*
-TODO:
-complete egg campaign
-add manual?
-*/
