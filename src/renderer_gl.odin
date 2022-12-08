@@ -12,13 +12,11 @@ import "spl"
 import "spl/gl"
 
 GL_State :: struct {
-	texture: int,
 	viewport: [4]int,
 	scale: f32,
-
-	vertices: [dynamic][2]f32,
-	tex_coords: [dynamic][2]f32,
-	colors: [dynamic]image.RGBA_Pixel,
+	texture: int,
+	color: image.RGBA_Pixel,
+	drawing: bool,
 }
 gl_state: GL_State
 
@@ -44,10 +42,6 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 
 		gl.Enable(gl.BLEND)
 		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-
-		gl.EnableClientState(gl.VERTEX_ARRAY)
-		gl.EnableClientState(gl.TEXTURE_COORD_ARRAY)
-		gl.EnableClientState(gl.COLOR_ARRAY)
 
 		for _, tex in &textures {
 			gl_register_texture(tex)
@@ -321,7 +315,10 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		gl_draw_stats()
 	}
 
-	gl_draw()
+	if gl_state.drawing {
+		gl.End()
+		gl_state.drawing = false
+	}
 
 	sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
@@ -342,10 +339,17 @@ gl_render_finish :: proc() {
 gl_set_viewport :: #force_inline proc(viewport: [4]int, scale: f32) {
 	if gl_state.viewport == viewport && gl_state.scale == scale do return
 
-	gl_draw()
+	if gl_state.drawing {
+		gl.End()
+	}
+
 	gl.Viewport(i32(viewport[0]), i32(viewport[1]), i32(viewport[2]), i32(viewport[3]))
 	gl_state.viewport = viewport
 	gl_state.scale = scale
+
+	if gl_state.drawing {
+		gl.Begin(gl.TRIANGLES)
+	}
 }
 
 gl_register_texture :: #force_inline proc(t: Textures) {
@@ -357,26 +361,14 @@ gl_register_texture :: #force_inline proc(t: Textures) {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 }
 
-gl_draw :: proc() {
-	if len(gl_state.vertices) == 0 do return
-
-	if len(gl_state.tex_coords) > 0 {
-		gl.TexCoordPointer(2, gl.FLOAT, 0, raw_data(gl_state.tex_coords))
-	}
-	gl.VertexPointer(2, gl.FLOAT, 0, raw_data(gl_state.vertices))
-	gl.ColorPointer(4, gl.UNSIGNED_BYTE, 0, raw_data(gl_state.colors))
-	gl.DrawArrays(gl.TRIANGLES, 0, auto_cast len(gl_state.colors))
-
-	clear(&gl_state.colors)
-	clear(&gl_state.vertices)
-	clear(&gl_state.tex_coords)
-}
-
 gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}) {
 	color := image.RGBA_Pixel{mod.r, mod.g, mod.b, 255}
 
 	if gl_state.texture != auto_cast textures_index[tex] {
-		gl_draw()
+		if gl_state.drawing {
+			gl.End()
+			gl_state.drawing = false
+		}
 
 		if gl_state.texture < 1 {
 			gl.Enable(gl.TEXTURE_2D)
@@ -385,6 +377,16 @@ gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: b
 		gl.BindTexture(gl.TEXTURE_2D, textures_index[tex])
 
 		gl_state.texture = auto_cast textures_index[tex]
+	}
+
+	if !gl_state.drawing {
+		gl.Begin(gl.TRIANGLES)
+		gl_state.drawing = true
+	}
+
+	if gl_state.color != color {
+		gl.Color4ub(expand_to_tuple(color))
+		gl_state.color = color
 	}
 
 	src := textures[tex]
@@ -433,19 +435,31 @@ gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: b
 	}
 
 	for i in 0..<6 {
-		append(&gl_state.tex_coords, tex_coords[i])
-		append(&gl_state.vertices, vertices[i])
-		append(&gl_state.colors, color)
+		gl.TexCoord2f(expand_to_tuple(tex_coords[i]))
+		gl.Vertex2f(expand_to_tuple(vertices[i]))
 	}
 }
 
 gl_draw_rect :: proc(rect: Rect, color: image.RGBA_Pixel) {
 	if gl_state.texture != -1 {
-		gl_draw()
+		if gl_state.drawing {
+			gl.End()
+			gl_state.drawing = false
+		}
 
 		gl.Disable(gl.TEXTURE_2D)
 
 		gl_state.texture = -1
+	}
+
+	if !gl_state.drawing {
+		gl.Begin(gl.TRIANGLES)
+		gl_state.drawing = true
+	}
+
+	if gl_state.color != color {
+		gl.Color4ub(expand_to_tuple(color))
+		gl_state.color = color
 	}
 
 	canvas_w := f32(gl_state.viewport[2]) / f32(gl_state.scale)
@@ -471,9 +485,9 @@ gl_draw_rect :: proc(rect: Rect, color: image.RGBA_Pixel) {
 		{vrt_right, vrt_bottom},
 		{vrt_left, vrt_bottom},
 	}
+
 	for i in 0..<6 {
-		append(&gl_state.vertices, vertices[i])
-		append(&gl_state.colors, color)
+		gl.Vertex2f(expand_to_tuple(vertices[i]))
 	}
 }
 
