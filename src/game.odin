@@ -210,9 +210,6 @@ State :: struct {
 	// TODO: i128 with atomic_load/store
 	client_size: i64,
 
-	viewport: [4]int,
-	rendering_scale: f32,
-
 	// _work shows how much time was spent on actual work in that frame before sleep
 	// _time shows total time of the frame, sleep included
 	frame_work, frame_time: time.Duration,
@@ -224,7 +221,8 @@ State :: struct {
 
 	keyboard: Keyboard_State,
 
-	finish_rendering, finished_rendering: bool,
+	finish_rendering: bool,
+	renderer_fallback: bool,
 }
 global_state: State
 
@@ -550,8 +548,8 @@ measure_or_draw_text :: proc(
 				software_draw_from_texture(t, pos + 1, textures[font.texture], {glyph_pos, font.glyph_size}, {}, shadow_color)
 				software_draw_from_texture(t, pos, textures[font.texture], {glyph_pos, font.glyph_size}, {}, color)
 			case .GL:
-				gl_draw_from_texture(pos + 1, font.texture, {glyph_pos, font.glyph_size}, {}, shadow_color, false)
-				gl_draw_from_texture(pos, font.texture, {glyph_pos, font.glyph_size}, {}, color, false)
+				gl_draw_from_texture(pos + 1, font.texture, {glyph_pos, font.glyph_size}, {}, shadow_color)
+				gl_draw_from_texture(pos, font.texture, {glyph_pos, font.glyph_size}, {}, color)
 			}
 		}
 
@@ -919,7 +917,7 @@ render :: proc(t: ^thread.Thread) {
 
 	finish_renderer(last_renderer)
 
-	sync.atomic_store(&global_state.finished_rendering, true)
+	sync.atomic_store(&global_state.finish_rendering, false)
 }
 
 can_move :: proc(pos: [2]int, d: Direction) -> bool {
@@ -2015,6 +2013,13 @@ update_world :: proc(t: ^thread.Thread) {
 				}
 			}
 
+			if sync.atomic_load(&global_state.renderer_fallback) {
+				settings.renderer = .Software
+				world.keep_selected_option = true
+				show_main_menu()
+				sync.atomic_store(&global_state.renderer_fallback, false)
+			}
+
 			global_state.previous_tick = time.tick_now()
 		}
 
@@ -2141,8 +2146,7 @@ _main :: proc(allocator: runtime.Allocator) {
 	}
 
 	sync.atomic_store(&global_state.finish_rendering, true)
-
-	for do if sync.atomic_load(&global_state.finished_rendering) do break
+	for sync.atomic_load(&global_state.finish_rendering) {}
 
 	// NOTE: this will only trigger on a proper quit, not on task termination
 	{

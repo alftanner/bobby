@@ -60,6 +60,7 @@ Mouse_Wheel_Event :: struct {
 
 User_Event :: struct {
 	data: rawptr,
+	index: int,
 }
 
 Event :: union {

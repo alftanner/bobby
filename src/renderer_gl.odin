@@ -13,14 +13,36 @@ import "spl/gl"
 
 textures_index: [Textures]u32
 /*
+Which state is there to track?
+Vertices
+Texture coordinates
+Colors
+Texture (only 1)
+Viewport (only 1)
+
+If any of the (only 1) states change - one needs to draw previous vertices, and change the state accordingly
+
+Alternatively one can keep all of the frame state, then do a gl_draw() call which will do the same thing by going over all of the states
+That needs more memory, doesn't it? Should be ok though.
+
+
 Draw_Entry :: struct {
 	texture_id: u32,
 	vertex: [2]f32,
 	tex_coord: [2]f32,
-	mod: image.RGB_Color,
 	color: image.RGBA_Color,
 }
 */
+
+GL_State :: struct {
+	texture: int,
+	color: image.RGBA_Pixel,
+	viewport: [4]int,
+	scale: f32,
+	drawing: bool,
+}
+gl_state: GL_State
+
 gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	// local world state
 	@static local_world: World
@@ -34,8 +56,8 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	if !was_init {
 		ok := gl.init(&window, settings.vsync)
 		if !ok {
-			fmt.println("OpenGL init failed!")
-			settings.renderer = .Software
+			sync.atomic_store(&global_state.renderer_fallback, true)
+			for sync.atomic_load(&global_state.renderer_fallback) {}
 			return
 		}
 
@@ -124,7 +146,7 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		lvl_offset.x = int(offset.x * TILE_SIZE)
 		lvl_offset.y = int(offset.y * TILE_SIZE)
 
-		if draw_world_background { // TODO: only draw needed parts, not the entire thing
+		if draw_world_background { // TODO: only draw needed parts, not the entire thing?
 			bg_pos: [2]int
 			bg_pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
 			bg_pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
@@ -314,6 +336,9 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		gl_draw_stats()
 	}
 
+	gl_end_drawing()
+	//gl_draw()
+
 	sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
 	if settings.vsync {
@@ -330,10 +355,24 @@ gl_render_finish :: proc() {
 	gl.deinit(&window)
 }
 
+gl_end_drawing :: proc() {
+	if gl_state.drawing {
+		gl.End()
+		gl_state.drawing = false
+	}
+}
+
 gl_set_viewport :: #force_inline proc(viewport: [4]int, scale: f32) {
-	global_state.viewport = viewport
+	if gl_state.viewport == viewport && gl_state.scale == scale do return
+	if gl_state.drawing {
+		gl.End()
+	}
 	gl.Viewport(i32(viewport[0]), i32(viewport[1]), i32(viewport[2]), i32(viewport[3]))
-	global_state.rendering_scale = scale
+	if gl_state.drawing {
+		gl.Begin(gl.TRIANGLES)
+	}
+	gl_state.viewport = viewport
+	gl_state.scale = scale
 }
 
 gl_register_texture :: #force_inline proc(t: Textures) {
@@ -352,37 +391,41 @@ gl_draw_text :: #force_inline proc(
 	color: image.RGB_Pixel = {255, 255, 255},
 	shadow_color: image.RGB_Pixel = {0, 0, 0},
 ) {
-	gl.Enable(gl.TEXTURE_2D)
-	gl.BindTexture(gl.TEXTURE_2D, textures_index[font.texture])
-
-	gl.Begin(gl.TRIANGLES)
-	defer gl.End()
-
 	measure_or_draw_text(.GL, nil, font, text, pos, color, shadow_color)
 }
 
-gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}, bind := true) {
-	src := textures[tex]
-	needs_mod := mod != {255, 255, 255}
+gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}) {
+	color := image.RGBA_Pixel{mod.r, mod.g, mod.b, 255}
 
-	if needs_mod {
-		gl.Color3ub(expand_to_tuple(mod))
-	}
-	defer if needs_mod {
-		gl.Color3ub(255, 255, 255)
-	}
+	if gl_state.texture != auto_cast textures_index[tex] {
+		if gl_state.drawing {
+			gl.End()
+			gl_state.drawing = false
+		}
 
-	if bind {
-		gl.Enable(gl.TEXTURE_2D)
+		if gl_state.texture < 1 {
+			gl.Enable(gl.TEXTURE_2D)
+		}
+
 		gl.BindTexture(gl.TEXTURE_2D, textures_index[tex])
-		gl.Begin(gl.TRIANGLES)
-	}
-	defer if bind {
-		gl.End()
+
+		gl_state.texture = auto_cast textures_index[tex]
 	}
 
-	canvas_w := f32(global_state.viewport[2]) / f32(global_state.rendering_scale)
-	canvas_h := f32(global_state.viewport[3]) / f32(global_state.rendering_scale)
+	if !gl_state.drawing {
+		gl.Begin(gl.TRIANGLES)
+		gl_state.drawing = true
+	}
+
+	if gl_state.color != color {
+		gl.Color4ub(expand_to_tuple(color))
+		gl_state.color = color
+	}
+
+	src := textures[tex]
+
+	canvas_w := f32(gl_state.viewport[2]) / f32(gl_state.scale)
+	canvas_h := f32(gl_state.viewport[3]) / f32(gl_state.scale)
 
 	src_left := f32(src_rect.x) / f32(src.size[0])
 	src_right := f32(src_rect.x + src_rect.size[0]) / f32(src.size[0])
@@ -422,18 +465,31 @@ gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: b
 	gl.Vertex2f(dst_left, dst_bottom)
 }
 
-gl_draw_rect :: proc(rect: Rect, col: image.RGBA_Pixel, filled: bool = true) {
-	gl.Disable(gl.TEXTURE_2D)
+gl_draw_rect :: proc(rect: Rect, color: image.RGBA_Pixel) {
+	if gl_state.texture != -1 {
+		if gl_state.drawing {
+			gl.End()
+			gl_state.drawing = false
+		}
 
-	gl.Color4ub(expand_to_tuple(col))
-	defer gl.Color4ub(255, 255, 255, 255)
+		gl.Disable(gl.TEXTURE_2D)
+
+		gl_state.texture = -1
+	}
+
+	if !gl_state.drawing {
+		gl.Begin(gl.TRIANGLES)
+		gl_state.drawing = true
+	}
+
+	if gl_state.color != color {
+		gl.Color4ub(expand_to_tuple(color))
+		gl_state.color = color
+	}
 
 	{
-		gl.Begin(gl.TRIANGLES)
-		defer gl.End()
-
-		canvas_w := f32(global_state.viewport[2]) / f32(global_state.rendering_scale)
-		canvas_h := f32(global_state.viewport[3]) / f32(global_state.rendering_scale)
+		canvas_w := f32(gl_state.viewport[2]) / f32(gl_state.scale)
+		canvas_h := f32(gl_state.viewport[3]) / f32(gl_state.scale)
 
 		dst_left := f32(rect.x) / canvas_w
 		dst_right := f32(rect.x + rect.size[0]) / canvas_w
@@ -468,8 +524,10 @@ gl_draw_credits :: proc(language: Language) {
 
 	gl_draw_text(general_font, str, {(CANVAS_SIZE[0] - str_size[0]) / 2, off_y})
 	off_y += str_size[1] + general_font.glyph_size[1]
+
 	gl_draw_from_texture({(CANVAS_SIZE[0] - textures[.Logo].size[0]) / 2, off_y}, .Logo, {{}, textures[.Logo].size})
 	off_y += textures[.Logo].size[1] + general_font.glyph_size[1]
+
 	gl_draw_text(general_font, str2, {(CANVAS_SIZE[0] - str2_size[0]) / 2, off_y})
 }
 
@@ -573,10 +631,9 @@ gl_draw_stats :: proc() {
 		u32(math.round(global_state.tps.average)), global_state.last_update.average,
 	)
 
-	viewport_size := swizzle(global_state.viewport, 2, 3)
 	pos: [2]int
-	pos.x = int(f32(viewport_size[0]) / global_state.rendering_scale) - 2
-	pos.y = int(f32(viewport_size[1]) / global_state.rendering_scale) - 2
+	pos.x = int(f32(gl_state.viewport[2]) / gl_state.scale) - 2
+	pos.y = int(f32(gl_state.viewport[3]) / gl_state.scale) - 2
 	pos -= measure_text(general_font, text)
 	gl_draw_text(general_font, text, pos)
 }

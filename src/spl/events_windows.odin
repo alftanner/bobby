@@ -6,7 +6,7 @@ import "core:runtime"
 import win32 "core:sys/windows"
 
 _send_user_event :: proc(window: ^Window, ev: User_Event) {
-	win32.SendMessageW(window.id, win32.WM_APP, uintptr(ev.data), 0)
+	win32.SendMessageW(window.id, win32.WM_APP, uintptr(ev.data), ev.index)
 }
 
 _next_event :: proc(window: ^Window) -> Event {
