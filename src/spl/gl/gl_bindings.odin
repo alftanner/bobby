@@ -14,6 +14,8 @@ BindTexture   :: gl.BindTexture
 GenTextures   :: gl.GenTextures
 TexParameteri :: gl.TexParameteri
 TexImage2D    :: gl.TexImage2D
+LineWidth     :: gl.LineWidth
+PolygonMode   :: gl.PolygonMode
 
 /* MatrixMode */
 MODELVIEW  :: gl.MODELVIEW
@@ -216,3 +218,28 @@ TRIANGLE_FAN   :: gl.TRIANGLE_FAN
 QUADS          :: gl.QUADS
 QUAD_STRIP     :: gl.QUAD_STRIP
 POLYGON        :: gl.POLYGON
+
+/* TextureWrapMode */
+CLAMP  :: gl.CLAMP
+REPEAT :: gl.REPEAT
+
+/* DrawBufferMode */
+NONE           :: gl.NONE
+FRONT_LEFT     :: gl.FRONT_LEFT
+FRONT_RIGHT    :: gl.FRONT_RIGHT
+BACK_LEFT      :: gl.BACK_LEFT
+BACK_RIGHT     :: gl.BACK_RIGHT
+FRONT          :: gl.FRONT
+BACK           :: gl.BACK
+LEFT           :: gl.LEFT
+RIGHT          :: gl.RIGHT
+FRONT_AND_BACK :: gl.FRONT_AND_BACK
+AUX0           :: gl.AUX0
+AUX1           :: gl.AUX1
+AUX2           :: gl.AUX2
+AUX3           :: gl.AUX3
+
+/* PolygonMode */
+POINT :: gl.POINT
+LINE  :: gl.LINE
+FILL  :: gl.FILL

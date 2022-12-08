@@ -602,18 +602,12 @@ draw_from_texture_software :: proc(dst: ^Texture2D, src: Texture2D, pos: [2]int,
 	}
 }
 
-draw_rect_software :: proc(dst: ^Texture2D, rect: Rect, col: image.RGBA_Pixel, filled: bool = true) {
+draw_rect_software :: proc(dst: ^Texture2D, rect: Rect, col: image.RGBA_Pixel) {
 	c := color(col)
 	endx := min(rect.x + rect.size[0], dst.size[0])
 	endy := min(rect.y + rect.size[1], dst.size[1])
 
 	for y in max(0, rect.y)..<endy do for x in max(0, rect.x)..<endx {
-		if !filled {
-			if (x != rect.x && x != rect.x + rect.size[0] - 1) && (y != rect.y && y != rect.y + rect.size[1] - 1) {
-				continue
-			}
-		}
-
 		dp := y * dst.size[0] + x
 		blend_pixel_software(&dst.pixels[dp], c)
 	}

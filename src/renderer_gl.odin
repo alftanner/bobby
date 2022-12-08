@@ -335,11 +335,13 @@ set_viewport_gl :: #force_inline proc(viewport: [4]int, scale: f32) {
 
 register_texture_gl :: #force_inline proc(t: ^Texture2D) {
 	gl.Enable(gl.TEXTURE_2D)
+	defer gl.Disable(gl.TEXTURE_2D)
+
 	gl.GenTextures(1, &t.index)
 	gl.BindTexture(gl.TEXTURE_2D, t.index)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, i32(t.size[0]), i32(t.size[1]), 0, gl.BGRA_EXT, gl.UNSIGNED_BYTE, raw_data(t.pixels))
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, i32(t.size[0]), i32(t.size[1]), 0, gl.BGRA_EXT, gl.UNSIGNED_BYTE, raw_data(t.pixels))
 }
 
 draw_text_gl :: #force_inline proc(
@@ -350,12 +352,14 @@ draw_text_gl :: #force_inline proc(
 	shadow_color: image.RGB_Pixel = {0, 0, 0},
 ) {
 	gl.Enable(gl.TEXTURE_2D)
+	defer gl.Disable(gl.TEXTURE_2D)
+
 	gl.BindTexture(gl.TEXTURE_2D, font.texture.index)
-	{
-		gl.Begin(gl.TRIANGLES)
-		defer gl.End()
-		measure_or_draw_text(.GL, nil, font, text, pos, color, shadow_color)
-	}
+
+	gl.Begin(gl.TRIANGLES)
+	defer gl.End()
+
+	measure_or_draw_text(.GL, nil, font, text, pos, color, shadow_color)
 }
 
 draw_from_texture_gl :: proc(src: Texture2D, pos: [2]int, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}, bind := true) {
@@ -375,6 +379,7 @@ draw_from_texture_gl :: proc(src: Texture2D, pos: [2]int, src_rect: Rect, flip: 
 	}
 	defer if bind {
 		gl.End()
+		gl.Disable(gl.TEXTURE_2D)
 	}
 
 	canvas_w := f32(global_state.viewport[2]) / f32(global_state.rendering_scale)
@@ -419,8 +424,6 @@ draw_from_texture_gl :: proc(src: Texture2D, pos: [2]int, src_rect: Rect, flip: 
 }
 
 draw_rect_gl :: proc(rect: Rect, col: image.RGBA_Pixel, filled: bool = true) {
-	gl.Disable(gl.TEXTURE_2D)
-
 	gl.Color4ub(expand_to_tuple(col))
 	defer gl.Color4ub(255, 255, 255, 255)
 
@@ -442,7 +445,6 @@ draw_rect_gl :: proc(rect: Rect, col: image.RGBA_Pixel, filled: bool = true) {
 			dst_top = (dst_top * -2) + 1
 			dst_bottom = (dst_bottom * -2) + 1
 		}
-		// TODO: how to do unfilled rect
 
 		gl.Vertex2f(dst_left, dst_top)
 		gl.Vertex2f(dst_right, dst_top)
