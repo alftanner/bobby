@@ -861,6 +861,10 @@ copy_level :: proc(dst, src: ^Level, q: ^Tile_Queue) -> (changed: bool) {
 	return
 }
 
+get_frame_delta :: proc(previous_tick: time.Tick, tick_time: time.Duration) -> f32 {
+	return f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now())) / time.duration_milliseconds(tick_time))
+}
+
 render :: proc(t: ^thread.Thread) {
 	context.assertion_failure_proc = assertion_failure_proc
 	context.logger.procedure = logger_proc
@@ -878,22 +882,36 @@ render :: proc(t: ^thread.Thread) {
 	load_textures()
 	sync.atomic_store(&global_state.loaded_resources, true)
 
-	for {
-		switch settings.renderer {
-		case .Software:
-			render_software(&timer)
-		case .GL:
-			render_gl(&timer)
+	finish_renderer := proc(r: Renderer) {
+		#partial switch r {
+		case .GL: render_gl_finish()
 		}
+	}
+
+	was_init: [Renderer]bool
+	last_renderer := settings.renderer
+	for {
+		renderer := settings.renderer
+		if last_renderer != renderer {
+			finish_renderer(last_renderer)
+			was_init[renderer] = false
+		}
+		last_renderer = renderer
+
+		switch renderer {
+		case .Software:
+			render_software(&timer, was_init[renderer])
+		case .GL:
+			render_gl(&timer, was_init[renderer])
+		}
+		was_init[renderer] = true
 
 		if sync.atomic_load(&global_state.finish_rendering) {
 			break
 		}
 	}
 
-	#partial switch settings.renderer {
-	case .GL: render_gl_finish()
-	}
+	finish_renderer(last_renderer)
 
 	sync.atomic_store(&global_state.finished_rendering, true)
 }
@@ -1279,6 +1297,18 @@ select_language_next :: proc() {
 	show_main_menu()
 }
 
+select_renderer_prev :: proc() {
+	settings.renderer -= Renderer(1)
+	world.keep_selected_option = true
+	show_main_menu()
+}
+
+select_renderer_next :: proc() {
+	settings.renderer += Renderer(1)
+	world.keep_selected_option = true
+	show_main_menu()
+}
+
 restart_level :: proc() {
 	if world.player.fading.state do return
 
@@ -1465,6 +1495,34 @@ show_main_menu :: proc() {
 
 		total_h += general_font.glyph_size[1]
 	}
+
+	{
+		option: Menu_Option
+		label_printf(&option, "{}: {}", language_strings[settings.language][.Renderer], renderer_to_string[settings.language][settings.renderer])
+		total_w := option.size[0] + (RIGHT_ARROW.size[0] + SPACE_BETWEEN_ARROW_AND_TEXT) * 2
+		option.x = (BUFFER_W - total_w) / 2
+		option.y = total_h
+		total_h += option.size[1]
+
+		arrows: [2]struct {
+			enabled: bool,
+			func: proc(),
+		}
+		arrows[0].func = select_renderer_prev
+		arrows[1].func = select_renderer_next
+
+		if int(settings.renderer) > 0 {
+			arrows[0].enabled = true
+		}
+		if int(settings.renderer) < len(Renderer) - 1 {
+			arrows[1].enabled = true
+		}
+		option.arrows = arrows
+
+		small_array.push_back(&world.menu_options, option)
+	}
+
+	total_h += general_font.glyph_size[1]
 
 	// Manual?
 

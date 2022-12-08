@@ -19,6 +19,7 @@ Language_Strings :: enum {
 	Campaign,
 	Scoreboard,
 	Language,
+	Renderer,
 	Credits,
 	Quit,
 	Restart_Level,
@@ -40,6 +41,7 @@ language_strings: [Language][Language_Strings]string = {
 		.Campaign = "Campaign",
 		.Scoreboard = "Scoreboard",
 		.Language = "Language",
+		.Renderer = "Renderer",
 		.Credits = "Credits",
 		.Quit = "Quit",
 		.Restart_Level = "Restart level",
@@ -59,6 +61,7 @@ language_strings: [Language][Language_Strings]string = {
 		.Campaign = "Кампанія",
 		.Scoreboard = "Табло",
 		.Language = "Мова",
+		.Renderer = "Рендерер",
 		.Credits = "Титри",
 		.Quit = "Вийти",
 		.Restart_Level = "Перезапустити рівень",
@@ -81,5 +84,16 @@ campaign_to_string: [Language][Campaign]string = {
 	.UA = {
 		.Carrot_Harvest = "Збір Моркви",
 		.Easter_Eggs = "Пасхальні Яйця",
+	},
+}
+
+renderer_to_string: [Language][Renderer]string = {
+	.EN = {
+		.Software = "Software",
+		.GL = "OpenGL 1.1",
+	},
+	.UA = {
+		.Software = "Програмний",
+		.GL = "OpenGL 1.1",
 	},
 }

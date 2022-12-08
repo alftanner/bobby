@@ -11,11 +11,7 @@ import "core:container/small_array"
 
 import "spl"
 
-get_frame_delta :: proc(previous_tick: time.Tick, tick_time: time.Duration) -> f32 {
-	return f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now())) / time.duration_milliseconds(tick_time))
-}
-
-render_software :: proc(timer: ^spl.Timer) {
+render_software :: proc(timer: ^spl.Timer, was_init: bool) {
 	// local world state
 	@static local_world: World
 	@static local_level: Level
@@ -31,14 +27,17 @@ render_software :: proc(timer: ^spl.Timer) {
 	@static offset: [2]f32
 	@static intro_alpha: u8
 
-	@static init: bool
-	if !init {
-		init = true
-
+	if !was_init {
+		if len(canvas.pixels) > 0 do texture_destroy(&canvas)
 		canvas = texture_make(BUFFER_W, BUFFER_H)
+
+		if len(scene_texture.pixels) > 0 do texture_destroy(&scene_texture)
 		scene_texture = texture_make(BUFFER_W, BUFFER_H)
+
 		for bg, c in &backgrounds {
+			if len(bg.pixels) > 0 do texture_destroy(&bg)
 			bg = texture_make(BUFFER_W + TILE_SIZE, BUFFER_H + TILE_SIZE)
+
 			for y in 0..=TILES_H do for x in 0..=TILES_W {
 				pos: [2]int = {x, y}
 				draw_from_texture_software(&bg, textures[.Grass if c == .Carrot_Harvest else .Ground], pos * TILE_SIZE, {{}, {TILE_SIZE, TILE_SIZE}})
@@ -50,13 +49,8 @@ render_software :: proc(timer: ^spl.Timer) {
 
 	canvas_redraw, cache_slow_redraw, scene_redraw: bool
 
-	old_fade := local_world.fade
-	old_scene := local_world.scene
-	old_scoreboard_page := local_world.scoreboard_page
-	old_selected_option := local_world.selected_option
-	old_selected_levels := local_settings.selected_levels
-	old_language := local_settings.language
-	old_campaign := local_settings.campaign
+	old_world := local_world
+	old_settings := local_settings
 
 	if sync.atomic_load(&world_updated) {
 		sync.guard(&world_lock)
@@ -72,12 +66,12 @@ render_software :: proc(timer: ^spl.Timer) {
 		tick_time = sync.atomic_load(&global_state.tick_time)
 	}
 
-	if old_scene != local_world.scene || old_campaign != local_settings.campaign {
+	if !was_init || old_world.scene != local_world.scene || old_settings.campaign != local_settings.campaign {
 		scene_redraw = true
 	}
-	if old_scoreboard_page != local_world.scoreboard_page || old_selected_option != local_world.selected_option ||
-	old_selected_levels != local_settings.selected_levels || old_language != local_settings.language ||
-	old_fade.state || local_world.fade.state {
+	if !was_init || old_world.fade.state || local_world.fade.state ||
+	old_world.scoreboard_page != local_world.scoreboard_page || old_world.selected_option != local_world.selected_option ||
+	old_settings.selected_levels != local_settings.selected_levels || old_settings.language != local_settings.language {
 		cache_slow_redraw = true
 	}
 

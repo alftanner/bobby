@@ -11,7 +11,7 @@ import "core:container/small_array"
 import "spl"
 import "spl/gl"
 
-render_gl :: proc(timer: ^spl.Timer) {
+render_gl :: proc(timer: ^spl.Timer, was_init: bool) {
 	// local world state
 	@static local_world: World
 	@static local_level: Level
@@ -21,10 +21,7 @@ render_gl :: proc(timer: ^spl.Timer) {
 	@static tick_time: time.Duration
 	@static offset: [2]f32
 
-	@static init: bool
-	if !init {
-		init = true
-
+	if !was_init {
 		ok := gl.init(&window, settings.vsync)
 		if !ok {
 			fmt.println("OpenGL init failed!")
