@@ -22,8 +22,6 @@ gl_state: GL_State
 
 textures_index: [Textures]u32
 
-// TODO: test how Z coordinate works with ordering, possibly switch system to do 1-pass for every texture, with different z coordinates
-
 gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	// local world state
 	@static local_world: World
