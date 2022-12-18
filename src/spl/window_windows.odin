@@ -1,14 +1,19 @@
 //+private
 package spl
 
-import "core:runtime"
+import "core:container/small_array"
 import win32 "core:sys/windows"
+
+Event_Q :: small_array.Small_Array(128, Event)
 
 Window_OS_Specific :: struct {
 	id: win32.HWND,
 	icon: win32.HICON,
 	main_fiber, message_fiber: rawptr,
-	last_event: Event,
+	old_style: u32,
+	old_client: Rect,
+	event_q: Event_Q,
+	processing_event: bool,
 }
 
 // need to store pointer to the window for _default_window_proc
@@ -27,13 +32,17 @@ _create :: proc(window: ^Window, pos: [2]int, size: [2]int, title: string, flags
 		cursor = win32.LoadCursorA(nil, win32.IDC_ARROW)
 	}
 
-	window_title: win32.wstring
-	{
-		context = runtime.default_context()
-		window_title = win32.utf8_to_wstring(title)
-	}
+	window_title := win32.utf8_to_wstring(title)
 	class_style := win32.CS_OWNDC | win32.CS_HREDRAW | win32.CS_VREDRAW | win32.CS_DBLCLKS
-	window_style := win32.WS_VISIBLE | win32.WS_OVERLAPPEDWINDOW &~ win32.WS_THICKFRAME &~ win32.WS_MAXIMIZEBOX
+	window_style := win32.WS_OVERLAPPEDWINDOW &~(win32.WS_THICKFRAME | win32.WS_MAXIMIZEBOX) | win32.WS_CLIPCHILDREN | win32.WS_CLIPSIBLINGS
+
+	if .Maximized in flags {
+		window_style |= win32.WS_MAXIMIZE
+	}
+
+	if .Resizable in flags || .Maximized in flags {
+		window_style |= win32.WS_THICKFRAME | win32.WS_MAXIMIZEBOX
+	}
 
 	x, y := i32(pos.x), i32(pos.y)
 	w, h := i32(size[0]), i32(size[1])
@@ -77,6 +86,41 @@ _create :: proc(window: ^Window, pos: [2]int, size: [2]int, title: string, flags
 		return false
 	}
 
+	{
+		dc := win32.GetDC(winid)
+		defer win32.ReleaseDC(winid, dc)
+
+		pixel_format: win32.PIXELFORMATDESCRIPTOR = {
+			nSize = size_of(win32.PIXELFORMATDESCRIPTOR),
+			nVersion = 1,
+			iPixelType = win32.PFD_TYPE_RGBA,
+			dwFlags = win32.PFD_SUPPORT_OPENGL | win32.PFD_DRAW_TO_WINDOW | win32.PFD_DOUBLEBUFFER,
+			cColorBits = 24,
+			cAlphaBits = 8,
+			iLayerType = win32.PFD_MAIN_PLANE,
+		}
+
+		format_index := win32.ChoosePixelFormat(dc, &pixel_format)
+		win32.DescribePixelFormat(dc, format_index, size_of(format_index), &pixel_format)
+		win32.SetPixelFormat(dc, format_index, &pixel_format)
+	}
+
+	{
+		style := cast(u32)win32.GetWindowLongPtrW(winid, win32.GWL_STYLE)
+		if .Resizable in flags {
+			style |= win32.WS_MAXIMIZEBOX | win32.WS_THICKFRAME
+		} else {
+			style &~= win32.WS_MAXIMIZEBOX | win32.WS_THICKFRAME
+		}
+		win32.SetWindowLongPtrW(winid, win32.GWL_STYLE, cast(int)style)
+	}
+
+	if .Maximized in flags {
+		win32.ShowWindow(winid, win32.SW_MAXIMIZE)
+	} else {
+		win32.ShowWindow(winid, win32.SW_SHOW)
+	}
+
 	// get decorations size
 	wr, cr: win32.RECT
 	point: win32.POINT
@@ -118,8 +162,67 @@ _create :: proc(window: ^Window, pos: [2]int, size: [2]int, title: string, flags
 }
 
 _destroy :: proc(window: ^Window) {
-	win32.DestroyWindow(window.id)
+	winid := window.id
 	window_handle = nil
+	win32.DestroyWindow(winid)
+}
+
+_maximize :: proc(window: ^Window) {
+	win32.ShowWindow(window.id, win32.SW_MAXIMIZE)
+}
+
+_minimize :: proc(window: ^Window) {
+	win32.ShowWindow(window.id, win32.SW_MINIMIZE)
+}
+
+_restore :: proc(window: ^Window) {
+	win32.ShowWindow(window.id, win32.SW_RESTORE)
+}
+
+_set_fullscreen :: proc(window: ^Window, fullscreen: bool) {
+	if !window.is_fullscreen {
+		window.old_style = cast(u32)win32.GetWindowLongPtrW(window.id, win32.GWL_STYLE)
+
+		rect: win32.RECT
+		point: win32.POINT
+		win32.GetClientRect(window.id, &rect)
+		win32.ClientToScreen(window.id, &point)
+		window.old_client = {{cast(int)point.x, cast(int)point.y}, {cast(int)rect.right, cast(int)rect.bottom}}
+	}
+
+	if fullscreen {
+		style := cast(u32)win32.GetWindowLongPtrW(window.id, win32.GWL_STYLE)
+		style &~= win32.WS_CAPTION | win32.WS_THICKFRAME
+		win32.SetWindowLongPtrW(window.id, win32.GWL_STYLE, cast(int)style)
+
+		monitor_info: win32.MONITORINFO = {
+			cbSize = size_of(win32.MONITORINFO),
+		}
+		win32.GetMonitorInfoW(win32.MonitorFromWindow(window.id, .MONITOR_DEFAULTTONEAREST), &monitor_info)
+
+		win32.SetWindowPos(
+			window.id, nil,
+			monitor_info.rcMonitor.left, monitor_info.rcMonitor.top,
+			monitor_info.rcMonitor.right - monitor_info.rcMonitor.left, monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top,
+			win32.SWP_NOZORDER | win32.SWP_NOACTIVATE | win32.SWP_FRAMECHANGED,
+		)
+
+
+		window.is_fullscreen = true
+	} else {
+		win32.SetWindowLongPtrW(window.id, win32.GWL_STYLE, cast(int)window.old_style)
+
+		crect: win32.RECT = {
+			i32(window.old_client.pos[0]),
+			i32(window.old_client.pos[1]),
+			i32(window.old_client.pos[0] + window.old_client.size[0]),
+			i32(window.old_client.pos[1] + window.old_client.size[1]),
+		}
+		win32.AdjustWindowRect(&crect, window.old_style, false)
+		win32.SetWindowPos(window.id, nil, crect.left, crect.top, crect.right - crect.left, crect.bottom - crect.top, win32.SWP_NOZORDER | win32.SWP_NOACTIVATE | win32.SWP_FRAMECHANGED)
+
+		window.is_fullscreen = false
+	}
 }
 
 _get_working_area :: #force_inline proc() -> Rect {
@@ -142,6 +245,7 @@ _resize :: proc(window: ^Window, size: [2]int) {
 	style := cast(u32)win32.GetWindowLongPtrW(window.id, win32.GWL_STYLE)
 	win32.AdjustWindowRect(&crect, style, false)
 	w, h = crect.right - crect.left, crect.bottom - crect.top
+
 	win32.SetWindowPos(window.id, nil, 0, 0, w, h, win32.SWP_NOMOVE | win32.SWP_NOZORDER)
 }
 

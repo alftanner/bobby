@@ -2,24 +2,15 @@ package spl
 
 import "core:image"
 
-/*
-TODO:
-set_fullscreen(.NONE/.FULLSCREEN/.BORDERLESS)
-maximize()
-minimize()
-*/
-
 Window_Flag :: enum {
 	Hide_Cursor,
-	// TODO: Maximized, Minimized, Hidden(?), Fullscreen, Borderless(?)
+	Maximized,
+	Resizable,
+	// TODO: Borderless,
+	// also replace Windows chrome at some point as well
+	// TODO?: Capture_Cursor,
 }
 Window_Flags :: distinct bit_set[Window_Flag; u8]
-
-Fullscreen_Type :: enum {
-	None,
-	Fullscreen,
-	Borderless,
-}
 
 Window_Mode :: enum {
 	Regular,
@@ -42,8 +33,9 @@ Window :: struct {
 	client:               Rect,
 	is_key_down:          [Key_Code]bool,
 	is_mouse_button_down: [Mouse_Button]bool,
-	fullscreen:           Fullscreen_Type,
+	is_maximized:         bool,
 	is_minimized:         bool,
+	is_fullscreen:        bool,
 	is_focused:           bool,
 	is_mouse_inside:      bool,
 	mode:                 Window_Mode,
@@ -79,6 +71,12 @@ set_min_size :: #force_inline proc(window: ^Window, size: [2]int) {
 	window.min_w, window.min_h = size[0], size[1]
 	_resize(window, window.client.size)
 }
+
+maximize :: #force_inline proc(window: ^Window) { _maximize(window) }
+minimize :: #force_inline proc(window: ^Window) { _minimize(window) }
+restore  :: #force_inline proc(window: ^Window) { _restore(window) }
+
+set_fullscreen :: #force_inline proc(window: ^Window, fullscreen: bool) { _set_fullscreen(window, fullscreen) }
 
 display_pixels :: #force_inline proc(window: ^Window, pixels: [][4]u8, pixels_size: [2]int, dest: Rect) { _display_pixels(window, pixels, pixels_size, dest) }
 

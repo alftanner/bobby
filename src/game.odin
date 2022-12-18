@@ -209,6 +209,7 @@ Keyboard_State :: struct {
 State :: struct {
 	// TODO: i128 with atomic_load/store
 	client_size: i64,
+	max_texture_size: i32,
 
 	// _work shows how much time was spent on actual work in that frame before sleep
 	// _time shows total time of the frame, sleep included

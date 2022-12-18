@@ -3,15 +3,22 @@ package spl
 
 import "core:fmt"
 import "core:runtime"
+import "core:container/small_array"
 import win32 "core:sys/windows"
 
 _send_user_event :: proc(window: ^Window, ev: User_Event) {
-	win32.SendMessageW(window.id, win32.WM_APP, uintptr(ev.data), ev.index)
+	win32.PostMessageW(window.id, win32.WM_APP, uintptr(ev.data), ev.index)
 }
 
 _next_event :: proc(window: ^Window) -> Event {
+	if window.event_q.len > 0 {
+		return small_array.pop_front(&window.event_q)
+	}
+
+	window.processing_event = true
 	win32.SwitchToFiber(window.message_fiber)
-	return window.last_event
+
+	return small_array.pop_front(&window.event_q)
 }
 
 _message_fiber_proc :: proc "stdcall" (data: rawptr) {
@@ -27,6 +34,10 @@ _message_fiber_proc :: proc "stdcall" (data: rawptr) {
 
 _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wparam: win32.WPARAM, lparam: win32.LPARAM) -> (result: win32.LRESULT) {
 	if window_handle == nil {
+		/*if msg == win32.WM_DESTROY {
+			win32.PostQuitMessage(0)
+			return 0
+		}*/
 		return win32.DefWindowProcW(winid, msg, wparam, lparam)
 	}
 
@@ -128,6 +139,7 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 			resize_type = .Minimized
 		}
 
+		window.is_maximized = resize_type == .Maximized
 		window.is_minimized = resize_type == .Minimized
 
 		ev = Resize_Event{
@@ -259,19 +271,25 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 		window.must_close = true
 		ev = Close_Event{}
 	case win32.WM_APP:
-		ev = User_Event{data = rawptr(wparam)}
+		ev = User_Event{data = rawptr(wparam), index = lparam}
 	}
 
 	if ev != nil {
-		window.last_event = ev
-		win32.SwitchToFiber(window.main_fiber)
-		#partial switch in ev {
-		case Close_Event:
-			if !window.must_close {
-				return 0
+		small_array.push_back(&window.event_q, ev)
+
+		if window.processing_event {
+			window.processing_event = false
+
+			win32.SwitchToFiber(window.main_fiber)
+
+			#partial switch in ev {
+			case Close_Event:
+				if !window.must_close {
+					return 0
+				}
+			case User_Event:
+				return 1
 			}
-		case User_Event:
-			return 1
 		}
 	}
 

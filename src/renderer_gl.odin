@@ -22,6 +22,8 @@ gl_state: GL_State
 
 textures_index: [Textures]u32
 
+// TODO: test how Z coordinate works with ordering, possibly switch system to do 1-pass for every texture, with different z coordinates
+
 gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	// local world state
 	@static local_world: World
@@ -33,19 +35,26 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	@static offset: [2]f32
 
 	if !was_init {
-		ok := gl.init(&window, settings.vsync)
-		if !ok {
+		if !gl.init(&window) {
 			sync.atomic_store(&global_state.renderer_fallback, true)
 			for sync.atomic_load(&global_state.renderer_fallback) {}
 			return
 		}
 
+		gl.GetIntegerv(gl.MAX_TEXTURE_SIZE, &global_state.max_texture_size)
+		for tex in Textures {
+			if textures[tex].size[0] > int(global_state.max_texture_size) || textures[tex].size[1] > int(global_state.max_texture_size) {
+				sync.atomic_store(&global_state.renderer_fallback, true)
+				for sync.atomic_load(&global_state.renderer_fallback) {}
+				return
+			}
+			gl_register_texture(tex)
+		}
+
 		gl.Enable(gl.BLEND)
 		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
-		for _, tex in &textures {
-			gl_register_texture(tex)
-		}
+		gl.set_vsync(.On if settings.vsync else .Off)
 	}
 
 	start_tick := time.tick_now()
@@ -334,6 +343,7 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 
 gl_render_finish :: proc() {
 	gl.deinit(&window)
+	global_state.max_texture_size = 0
 }
 
 gl_set_viewport :: #force_inline proc(viewport: [4]int, scale: f32) {
