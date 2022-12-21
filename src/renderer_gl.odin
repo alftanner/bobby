@@ -330,7 +330,6 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	}
 
 	gl_end()
-	gl.Finish()
 
 	sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
