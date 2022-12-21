@@ -329,16 +329,16 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		gl_draw_stats()
 	}
 
-	gl_finish()
+	gl_end()
+	gl.Finish()
 
 	sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
-	if settings.vsync {
-		gl.swap_buffers(&window)
-	} else {
+	if !settings.vsync {
 		spl.wait_timer(timer)
-		gl.Flush()
 	}
+
+	gl.swap_buffers(&window)
 
 	sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 }
@@ -375,11 +375,6 @@ gl_set_color :: #force_inline proc(color: image.RGBA_Pixel) {
 		gl.Color4ub(expand_to_tuple(color))
 		gl_state.color = color
 	}
-}
-
-gl_finish :: #force_inline proc() {
-	gl_end()
-	gl.Finish()
 }
 
 gl_register_texture :: #force_inline proc(t: Textures) {
