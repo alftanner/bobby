@@ -527,9 +527,11 @@ software_draw_stats :: proc(t: ^Texture2D) -> Rect {
 	tbuf: [256]byte
 	text := fmt.bprintf(
 		tbuf[:],
-`{}FPS{} {}ms last
+`{}{}
+{}FPS {}ms last
 {}TPS {}ms last`,
-		u32(math.round(global_state.fps.average)), " (VSYNC)" if settings.vsync else "", global_state.last_frame.average,
+		settings.renderer, "/VSYNC" if settings.vsync else "",
+		u32(math.round(global_state.fps.average)), global_state.last_frame.average,
 		u32(math.round(global_state.tps.average)), global_state.last_update.average,
 	)
 

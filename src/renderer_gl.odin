@@ -12,15 +12,19 @@ import "spl"
 import "spl/gl"
 
 GL_State :: struct {
-	viewport: [4]int,
+	viewport: Rect,
 	scale: f32,
 	texture: int,
 	color: image.RGBA_Pixel,
 	drawing: bool,
+	culled: int,
 }
 gl_state: GL_State
 
 textures_index: [Textures]u32
+
+// vertex coordinates of 2 triangles, from top-left
+RECT_VERTICES :: 0b011010_001011
 
 gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	// local world state
@@ -56,6 +60,7 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	}
 
 	start_tick := time.tick_now()
+	gl_state = {}
 
 	if sync.atomic_load(&world_updated) {
 		sync.guard(&world_lock)
@@ -75,7 +80,8 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		buf_size := CANVAS_SIZE * scale
 		off_x := (int(client_size[0]) - buf_size[0]) / 2
 		off_y := (int(client_size[1]) - buf_size[1]) / 2
-		gl_set_viewport({off_x, off_y, buf_size[0], buf_size[1]}, f32(scale))
+		gl_set_viewport({{off_x, off_y}, buf_size})
+		gl_state.scale = f32(scale)
 	}
 
 	gl.ClearColor(0, 0, 0, 1)
@@ -318,14 +324,12 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 
 	if local_settings.show_stats {
 		calculate_stats()
-		gl_set_viewport({0, 0, int(client_size[0]), int(client_size[1])}, f32(scale))
+		gl_set_viewport({{}, {int(client_size[0]), int(client_size[1])}})
+		gl_state.scale = f32(scale)
 		gl_draw_stats()
 	}
 
-	if gl_state.drawing {
-		gl.End()
-		gl_state.drawing = false
-	}
+	gl_finish()
 
 	sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
@@ -344,20 +348,38 @@ gl_render_finish :: proc() {
 	global_state.max_texture_size = 0
 }
 
-gl_set_viewport :: #force_inline proc(viewport: [4]int, scale: f32) {
-	if gl_state.viewport == viewport && gl_state.scale == scale do return
+gl_set_viewport :: #force_inline proc(viewport: Rect) {
+	if gl_state.viewport != viewport {
+		gl_end()
+		gl.Viewport(i32(viewport.x), i32(viewport.y), i32(viewport.size[0]), i32(viewport.size[1]))
+		gl_state.viewport = viewport
+	}
+}
 
+gl_begin :: #force_inline proc() {
+	if !gl_state.drawing {
+		gl.Begin(gl.TRIANGLES)
+		gl_state.drawing = true
+	}
+}
+
+gl_end :: #force_inline proc() {
 	if gl_state.drawing {
 		gl.End()
+		gl_state.drawing = false
 	}
+}
 
-	gl.Viewport(i32(viewport[0]), i32(viewport[1]), i32(viewport[2]), i32(viewport[3]))
-	gl_state.viewport = viewport
-	gl_state.scale = scale
-
-	if gl_state.drawing {
-		gl.Begin(gl.TRIANGLES)
+gl_set_color :: #force_inline proc(color: image.RGBA_Pixel) {
+	if gl_state.color != color {
+		gl.Color4ub(expand_to_tuple(color))
+		gl_state.color = color
 	}
+}
+
+gl_finish :: #force_inline proc() {
+	gl_end()
+	gl.Finish()
 }
 
 gl_register_texture :: #force_inline proc(t: Textures) {
@@ -369,14 +391,29 @@ gl_register_texture :: #force_inline proc(t: Textures) {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 }
 
+normalize_vertices :: #force_inline proc(v_hor, v_ver: ^[2]f32) -> (cull: bool) {
+	canvas_size: [2]f32 = {f32(gl_state.viewport.size[0]), f32(gl_state.viewport.size[1])}
+	canvas_size /= gl_state.scale
+
+	v_hor^ /= canvas_size[0]
+	v_ver^ /= canvas_size[1]
+
+	if v_hor[0] > 1 || v_ver[0] > 1 || v_hor[1] < 0 || v_ver[1] < 0 {
+		return true
+	}
+
+	// 0:1 -> -1:1, bottom:left -> top:left
+	v_hor^ = (v_hor^ * 2) - 1
+	v_ver^ = (v_ver^ * -2) + 1
+
+	return
+}
+
 gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}) {
 	color := image.RGBA_Pixel{mod.r, mod.g, mod.b, 255}
 
 	if gl_state.texture != auto_cast textures_index[tex] {
-		if gl_state.drawing {
-			gl.End()
-			gl_state.drawing = false
-		}
+		gl_end()
 
 		if gl_state.texture < 1 {
 			gl.Enable(gl.TEXTURE_2D)
@@ -387,115 +424,60 @@ gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: b
 		gl_state.texture = auto_cast textures_index[tex]
 	}
 
-	if !gl_state.drawing {
-		gl.Begin(gl.TRIANGLES)
-		gl_state.drawing = true
-	}
-
-	if gl_state.color != color {
-		gl.Color4ub(expand_to_tuple(color))
-		gl_state.color = color
-	}
+	gl_begin()
+	gl_set_color(color)
 
 	src := textures[tex]
 
-	canvas_w := f32(gl_state.viewport[2]) / f32(gl_state.scale)
-	canvas_h := f32(gl_state.viewport[3]) / f32(gl_state.scale)
+	c_hor: [2]f32 = {f32(src_rect.x), f32(src_rect.x + src_rect.size[0])} / f32(src.size[0])
+	c_ver: [2]f32 = {f32(src_rect.y), f32(src_rect.y + src_rect.size[1])} / f32(src.size[1])
 
-	crd_left := f32(src_rect.x) / f32(src.size[0])
-	crd_right := f32(src_rect.x + src_rect.size[0]) / f32(src.size[0])
-	crd_top := f32(src_rect.y) / f32(src.size[1])
-	crd_bottom := f32(src_rect.y + src_rect.size[1]) / f32(src.size[1])
+	v_hor: [2]f32 = {f32(pos.x), f32(pos.x + src_rect.size[0])}
+	v_ver: [2]f32 = {f32(pos.y), f32(pos.y + src_rect.size[1])}
 
-	vrt_left := f32(pos.x) / canvas_w
-	vrt_right := f32(pos.x + src_rect.size[0]) / canvas_w
-	vrt_top := f32(pos.y) / canvas_h
-	vrt_bottom := f32(pos.y + src_rect.size[1]) / canvas_h
-
-	{ // normalize vertices
-		vrt_left = (vrt_left * 2) - 1
-		vrt_right = (vrt_right * 2) - 1
-		vrt_top = (vrt_top * -2) + 1
-		vrt_bottom = (vrt_bottom * -2) + 1
+	if normalize_vertices(&v_hor, &v_ver) {
+		gl_state.culled += 1
+		return
 	}
+
+	// flip if needed
 	if .Horizontal in flip {
-		vrt_left, vrt_right = vrt_right, vrt_left
+		v_hor.xy = v_hor.yx
 	}
 	if .Vertical in flip {
-		vrt_top, vrt_bottom = vrt_bottom, vrt_top
+		v_ver.xy = v_ver.yx
 	}
 
-	tex_coords: [6][2]f32 = {
-		{crd_left, crd_top},
-		{crd_right, crd_top},
-		{crd_right, crd_bottom},
-		{crd_left, crd_top},
-		{crd_right, crd_bottom},
-		{crd_left, crd_bottom},
-	}
-	vertices: [6][2]f32 = {
-		{vrt_left, vrt_top},
-		{vrt_right, vrt_top},
-		{vrt_right, vrt_bottom},
-		{vrt_left, vrt_top},
-		{vrt_right, vrt_bottom},
-		{vrt_left, vrt_bottom},
-	}
-
-	for i in 0..<6 {
-		gl.TexCoord2f(expand_to_tuple(tex_coords[i]))
-		gl.Vertex2f(expand_to_tuple(vertices[i]))
+	for i in uint(0)..<6 {
+		hor := (RECT_VERTICES >> i) & 1
+		ver := (RECT_VERTICES >> (i + 6)) & 1
+		gl.TexCoord2f(c_hor[hor], c_ver[ver])
+		gl.Vertex2f(v_hor[hor], v_ver[ver])
 	}
 }
 
 gl_draw_rect :: proc(rect: Rect, color: image.RGBA_Pixel) {
 	if gl_state.texture != -1 {
-		if gl_state.drawing {
-			gl.End()
-			gl_state.drawing = false
-		}
-
+		gl_end()
 		gl.Disable(gl.TEXTURE_2D)
-
 		gl_state.texture = -1
 	}
 
-	if !gl_state.drawing {
-		gl.Begin(gl.TRIANGLES)
-		gl_state.drawing = true
+	gl_begin()
+	gl_set_color(color)
+
+	v_hor: [2]f32 = {f32(rect.x), f32(rect.x + rect.size[0])}
+	v_ver: [2]f32 = {f32(rect.y), f32(rect.y + rect.size[1])}
+
+	if normalize_vertices(&v_hor, &v_ver) {
+		gl_state.culled += 1
+		return
 	}
 
-	if gl_state.color != color {
-		gl.Color4ub(expand_to_tuple(color))
-		gl_state.color = color
-	}
-
-	canvas_w := f32(gl_state.viewport[2]) / f32(gl_state.scale)
-	canvas_h := f32(gl_state.viewport[3]) / f32(gl_state.scale)
-
-	vrt_left := f32(rect.x) / canvas_w
-	vrt_right := f32(rect.x + rect.size[0]) / canvas_w
-	vrt_top := f32(rect.y) / canvas_h
-	vrt_bottom := f32(rect.y + rect.size[1]) / canvas_h
-
-	{ // normalize vertices
-		vrt_left = (vrt_left * 2) - 1
-		vrt_right = (vrt_right * 2) - 1
-		vrt_top = (vrt_top * -2) + 1
-		vrt_bottom = (vrt_bottom * -2) + 1
-	}
-
-	vertices: [6][2]f32 = {
-		{vrt_left, vrt_top},
-		{vrt_right, vrt_top},
-		{vrt_right, vrt_bottom},
-		{vrt_left, vrt_top},
-		{vrt_right, vrt_bottom},
-		{vrt_left, vrt_bottom},
-	}
-
-	for i in 0..<6 {
-		gl.Vertex2f(expand_to_tuple(vertices[i]))
+	for i in uint(0)..<6 {
+		hor := (RECT_VERTICES >> i) & 1
+		ver := (RECT_VERTICES >> (i + 6)) & 1
+		gl.Vertex2f(v_hor[hor], v_ver[ver])
 	}
 }
 
@@ -621,15 +603,17 @@ gl_draw_stats :: proc() {
 	tbuf: [256]byte
 	text := fmt.bprintf(
 		tbuf[:],
-`{}FPS{} {}ms last
+`{}{}/{} culled
+{}FPS {}ms last
 {}TPS {}ms last`,
-		u32(math.round(global_state.fps.average)), " (VSYNC)" if settings.vsync else "", global_state.last_frame.average,
+		settings.renderer, "/VSYNC" if settings.vsync else "", gl_state.culled,
+		u32(math.round(global_state.fps.average)), global_state.last_frame.average,
 		u32(math.round(global_state.tps.average)), global_state.last_update.average,
 	)
 
 	pos: [2]int
-	pos.x = int(f32(gl_state.viewport[2]) / gl_state.scale) - 2
-	pos.y = int(f32(gl_state.viewport[3]) / gl_state.scale) - 2
+	pos.x = int(f32(gl_state.viewport.size[0]) / gl_state.scale) - 2
+	pos.y = int(f32(gl_state.viewport.size[1]) / gl_state.scale) - 2
 	pos -= measure_text(general_font, text)
 	gl_draw_text(general_font, text, pos)
 }
