@@ -9,7 +9,8 @@ Focus_Event :: struct {
 }
 
 Draw_Event :: struct {
-	region: Rect,
+	// x, y, w, h
+	region: [4]uint,
 }
 
 Resize_Type :: enum {

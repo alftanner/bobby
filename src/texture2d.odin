@@ -3,8 +3,6 @@ package main
 import "core:mem"
 import "core:image"
 
-import "spl"
-
 WHITE  := platform_color({255, 255, 255, 255})
 BLACK  := platform_color({0,   0,   0,   255})
 RED    := platform_color({237, 28,  36,  255})
@@ -18,7 +16,10 @@ Flip :: enum {
 	Vertical,
 }
 
-Rect :: spl.Rect
+Rect :: struct {
+	using pos: [2]int,
+	size: [2]int,
+}
 
 Color :: [4]u8
 

@@ -406,7 +406,8 @@ software_display :: proc(canvas: ^Texture2D) {
 	buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
 	off_x := (cast(int)client_size[0] - buf_w) / 2
 	off_y := (cast(int)client_size[1] - buf_h) / 2
-	spl.display_pixels(&window, canvas.pixels, canvas.size, {{off_x, off_y}, {buf_w, buf_h}})
+	canvas_size: [2]uint = {cast(uint)canvas.size[0], cast(uint)canvas.size[1]}
+	spl.display_pixels(&window, canvas.pixels, canvas_size, {off_x, off_y}, {uint(buf_w), uint(buf_h)})
 }
 
 software_draw_scoreboard :: proc(t: ^Texture2D, q: ^Region_Cache, labels: []Text_Label, page: int) {

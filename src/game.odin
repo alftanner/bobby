@@ -2067,20 +2067,13 @@ _main :: proc(allocator: runtime.Allocator) {
 		json.unmarshal(bytes, &settings)
 	}
 
-	pos: [2]int
-	window_size: [2]int = {WINDOW_W, WINDOW_H}
-	{ // center the window
-		area := spl.get_working_area()
-		pos = area.pos + ((area.size / 2) - (window_size / 2))
-	}
-
-	assert(spl.create(&window, pos, window_size, GAME_TITLE), "Failed to create window")
+	assert(spl.create(&window, GAME_TITLE, .Centered, [2]uint{WINDOW_W, WINDOW_H}), "Failed to create window")
 	defer spl.destroy(&window)
 
 	spl.set_resizable(&window, true)
 	spl.set_min_size(&window, {BUFFER_W, BUFFER_H})
 
-	save_to_i64(&global_state.client_size, {i32(window.client.size[0]), i32(window.client.size[1])})
+	save_to_i64(&global_state.client_size, {i32(window.client_size[0]), i32(window.client_size[1])})
 
 	scheduler_precise: bool
 	if !spl.has_precise_timer() {
@@ -2117,7 +2110,7 @@ _main :: proc(allocator: runtime.Allocator) {
 			}
 		case spl.Draw_Event:
 		case spl.Resize_Event:
-			save_to_i64(&global_state.client_size, {i32(window.client.size[0]), i32(window.client.size[1])})
+			save_to_i64(&global_state.client_size, {i32(window.client_size[0]), i32(window.client_size[1])})
 		case spl.Move_Event:
 		case spl.Character_Event:
 		case spl.Keyboard_Event:

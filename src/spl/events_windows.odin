@@ -60,41 +60,42 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 	case win32.WM_WINDOWPOSCHANGING: // limit window size, if need be
 		pos := cast(^win32.WINDOWPOS)cast(uintptr)lparam
 
-		dw, dh := window.dec_w, window.dec_h
-		cw, ch := cast(int)pos.cx - dw, cast(int)pos.cy - dh
+		dw, dh := int(window.dec_size[0]), int(window.dec_size[1])
+		mw, mh := int(window.min_size[0]), int(window.min_size[1])
+		nw, nh := int(pos.cx) - dw, int(pos.cy) - dh
+		cw, ch := int(window.client_size[0]), int(window.client_size[1])
 
-		if window.min_w > 0 do cw = max(cw, window.min_w)
-		if window.min_h > 0 do ch = max(ch, window.min_h)
+		if mw > 0 do nw = max(nw, mw)
+		if mh > 0 do nh = max(nh, mh)
 
 		px, py := cast(int)pos.x, cast(int)pos.y
 		// correct position when resizing from top/left
 		if window.mode == .Resizing {
-			if px > window.x && window.client.size[0] > window.min_w {
-				px = min(px, window.x + window.client.size[0] - window.min_w)
+			if px > window.pos.x && cw > mw {
+				px = min(px, window.pos.x + cw - mw)
 			} else {
-				px = min(px, window.x)
+				px = min(px, window.pos.x)
 			}
 
-			if py > window.y && window.client.size[1] > window.min_h {
-				py = min(py, window.y + window.client.size[1] - window.min_h)
+			if py > window.pos.y && ch > mh {
+				py = min(py, window.pos.y + ch - mh)
 			} else {
-				py = min(py, window.y)
+				py = min(py, window.pos.y)
 			}
 		}
 		pos.x = cast(i32)px
 		pos.y = cast(i32)py
 
-		pos.cx, pos.cy = i32(cw + dw), i32(ch + dh)
+		pos.cx, pos.cy = i32(nw + dw), i32(nh + dh)
 	case win32.WM_WINDOWPOSCHANGED:
 		pos := cast(^win32.WINDOWPOS)cast(uintptr)lparam
 
 		rect: win32.RECT
-		point: win32.POINT
 		win32.GetClientRect(winid, &rect)
-		win32.ClientToScreen(winid, &point)
 
-		window.rect   = {{cast(int)pos.x, cast(int)pos.y}, {cast(int)pos.cx, cast(int)pos.cy}}
-		window.client = {{cast(int)point.x, cast(int)point.y}, {cast(int)rect.right, cast(int)rect.bottom}}
+		window.pos = {cast(int)pos.x, cast(int)pos.y}
+		window.size = {cast(uint)pos.cx, cast(uint)pos.cy}
+		window.client_size = {cast(uint)rect.right, cast(uint)rect.bottom}
 	case win32.WM_SYSCOMMAND:
 		switch t := win32.GET_SC_WPARAM(wparam); t {
 		case win32.SC_SIZE:
@@ -115,7 +116,7 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 		}
 	case win32.WM_EXITSIZEMOVE:
 		mode := window.mode
-		window.mode = .Regular
+		window.mode = .Static
 
 		#partial switch mode {
 		case .Resizing:
@@ -146,7 +147,7 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 			type = resize_type,
 		}
 	case win32.WM_MOVE:
-		window.is_minimized = window.x == -32000 && window.y == -32000
+		window.is_minimized = window.pos.x == -32000 && window.pos.y == -32000
 
 		ev = Move_Event{
 			type = .Minimized if window.is_minimized else .Default,
@@ -162,10 +163,12 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 		if win32.GetUpdateRect(winid, &winrect, false) {
 			win32.ValidateRect(winid, nil)
 		}
-		ev = Draw_Event{{
-			{int(winrect.left), int(winrect.top)},
-			{int(winrect.right) - int(winrect.left), int(winrect.bottom) - int(winrect.top)},
-		}}
+		ev = Draw_Event{
+			region = {
+				uint(winrect.left), uint(winrect.top),
+				uint(winrect.right - winrect.left), uint(winrect.bottom - winrect.top),
+			},
+		}
 	case win32.WM_CHAR:
 		ev = Character_Event{
 			character = cast(rune)wparam,

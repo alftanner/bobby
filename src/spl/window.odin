@@ -4,8 +4,8 @@ import "core:image"
 
 Window_Flag :: enum {
 	Hide_Cursor,
-	Maximized,
 	Resizable,
+	Maximized,
 	// TODO: Borderless,
 	// also replace Windows chrome at some point as well
 	// TODO?: Capture_Cursor,
@@ -13,14 +13,18 @@ Window_Flag :: enum {
 Window_Flags :: distinct bit_set[Window_Flag; u8]
 
 Window_Mode :: enum {
-	Regular,
+	Static,
 	Moving,
 	Resizing,
 }
 
-Rect :: struct {
-	using pos: [2]int,
-	size: [2]int,
+Window_Pos_Variant :: enum {
+	Centered,
+}
+
+Window_Pos :: union {
+	Window_Pos_Variant,
+	[2]int,
 }
 
 Window :: struct {
@@ -29,8 +33,8 @@ Window :: struct {
 	clear_color: image.RGB_Pixel,
 
 	// read-only
-	using rect:           Rect,
-	client:               Rect,
+	pos:                  [2]int,
+	size, client_size:    [2]uint,
 	is_key_down:          [Key_Code]bool,
 	is_mouse_button_down: [Mouse_Button]bool,
 	is_maximized:         bool,
@@ -41,16 +45,16 @@ Window :: struct {
 	mode:                 Window_Mode,
 
 	// read-only, not very useful
-	min_w, min_h: int,
-	dec_w, dec_h: int, // TODO: remove decorations and use custom window chrome???
-	flags:        Window_Flags,
+	min_size: [2]uint,
+	dec_size: [2]uint, // TODO: remove decorations and use custom window chrome???
+	flags:    Window_Flags,
 
 	// internal
 	using specific: Window_OS_Specific,
 }
 
-create :: proc(window: ^Window, pos: [2]int = {-1, -1}, size: [2]int = {-1, -1}, name: string = "Window", flags: Window_Flags = {}) -> bool {
-	return _create(window, pos, size, name, flags)
+create :: proc(window: ^Window, name: string = "Window", pos: Window_Pos = nil, size: Maybe([2]uint) = nil, flags: Window_Flags = {}) -> bool {
+	return _create(window, name, pos, size, flags)
 }
 
 destroy :: #force_inline proc(window: ^Window) { _destroy(window) }
@@ -59,17 +63,17 @@ next_event :: #force_inline proc(window: ^Window) -> Event { return _next_event(
 
 send_user_event :: #force_inline proc(window: ^Window, ev: User_Event) { _send_user_event(window, ev) }
 
-get_working_area :: #force_inline proc() -> Rect { return _get_working_area() }
+get_working_area :: #force_inline proc() -> (pos: [2]int, size: [2]uint) { return _get_working_area() }
 
 move :: #force_inline proc(window: ^Window, pos: [2]int) { _move(window, pos) }
 
-resize :: #force_inline proc(window: ^Window, size: [2]int) { _resize(window, size) }
+resize :: #force_inline proc(window: ^Window, size: [2]uint) { _resize(window, size) }
 
 set_resizable :: #force_inline proc(window: ^Window, resizable: bool) { _set_resizable(window, resizable) }
 
-set_min_size :: #force_inline proc(window: ^Window, size: [2]int) {
-	window.min_w, window.min_h = size[0], size[1]
-	_resize(window, window.client.size)
+set_min_size :: #force_inline proc(window: ^Window, size: [2]uint) {
+	window.min_size = size
+	_resize(window, window.client_size)
 }
 
 maximize :: #force_inline proc(window: ^Window) { _maximize(window) }
@@ -78,7 +82,9 @@ restore  :: #force_inline proc(window: ^Window) { _restore(window) }
 
 set_fullscreen :: #force_inline proc(window: ^Window, fullscreen: bool) { _set_fullscreen(window, fullscreen) }
 
-display_pixels :: #force_inline proc(window: ^Window, pixels: [][4]u8, pixels_size: [2]int, dest: Rect) { _display_pixels(window, pixels, pixels_size, dest) }
+display_pixels :: #force_inline proc(window: ^Window, pixels: [][4]u8, pixels_size: [2]uint, pos: [2]int, size: [2]uint) {
+	_display_pixels(window, pixels, pixels_size, pos, size)
+}
 
 // TODO: bug
 //wait_vblank :: _wait_vblank

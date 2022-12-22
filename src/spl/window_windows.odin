@@ -11,7 +11,8 @@ Window_OS_Specific :: struct {
 	icon: win32.HICON,
 	main_fiber, message_fiber: rawptr,
 	old_style: u32,
-	old_client: Rect,
+	old_pos: [2]int,
+	old_size: [2]uint,
 	event_q: Event_Q,
 	processing_event: bool,
 }
@@ -19,7 +20,7 @@ Window_OS_Specific :: struct {
 // need to store pointer to the window for _default_window_proc
 @private window_handle: ^Window
 
-_create :: proc(window: ^Window, pos: [2]int, size: [2]int, title: string, flags: Window_Flags) -> bool {
+_create :: proc(window: ^Window, title: string, pos: Window_Pos, size: Maybe([2]uint), flags: Window_Flags) -> bool {
 	if window_handle != nil {
 		return false
 	}
@@ -37,20 +38,23 @@ _create :: proc(window: ^Window, pos: [2]int, size: [2]int, title: string, flags
 	window_style := win32.WS_OVERLAPPEDWINDOW &~(win32.WS_THICKFRAME | win32.WS_MAXIMIZEBOX) | win32.WS_CLIPCHILDREN | win32.WS_CLIPSIBLINGS
 
 	if .Maximized in flags {
-		window_style |= win32.WS_MAXIMIZE
+		window_style |= win32.WS_THICKFRAME | win32.WS_MAXIMIZEBOX | win32.WS_MAXIMIZE
 	}
 
-	if .Resizable in flags || .Maximized in flags {
+	if .Resizable in flags {
 		window_style |= win32.WS_THICKFRAME | win32.WS_MAXIMIZEBOX
 	}
 
-	x, y := i32(pos.x), i32(pos.y)
-	w, h := i32(size[0]), i32(size[1])
+	x, y: i32 = win32.CW_USEDEFAULT, win32.CW_USEDEFAULT
+	w, h: i32 = win32.CW_USEDEFAULT, win32.CW_USEDEFAULT
 
-	if x < 0 do x = win32.CW_USEDEFAULT
-	if y < 0 do y = win32.CW_USEDEFAULT
-	if w < 0 do w = win32.CW_USEDEFAULT
-	if h < 0 do h = win32.CW_USEDEFAULT
+	if v, ok := pos.([2]int); ok {
+		x, y = i32(v.x), i32(v.y)
+	}
+
+	if v, ok := size.([2]uint); ok {
+		w, h = i32(v[0]), i32(v[1])
+	}
 
 	crect: win32.RECT
 	if x >= 0 do crect.left = x
@@ -115,44 +119,51 @@ _create :: proc(window: ^Window, pos: [2]int, size: [2]int, title: string, flags
 		win32.SetWindowLongPtrW(winid, win32.GWL_STYLE, cast(int)style)
 	}
 
-	if .Maximized in flags {
-		win32.ShowWindow(winid, win32.SW_MAXIMIZE)
-	} else {
-		win32.ShowWindow(winid, win32.SW_SHOW)
-	}
-
 	// get decorations size
 	wr, cr: win32.RECT
 	point: win32.POINT
 	win32.GetWindowRect(winid, &wr)
 	win32.GetClientRect(winid, &cr)
 	win32.ClientToScreen(winid, &point)
-	dec_w, dec_h := int(wr.right - wr.left - cr.right), int(wr.bottom - wr.top - cr.bottom)
+	dec_size := [2]uint{uint(wr.right - wr.left - cr.right), uint(wr.bottom - wr.top - cr.bottom)}
+	window_pos := [2]int{cast(int)wr.left, cast(int)wr.top}
+	window_size := [2]uint{uint(wr.right - wr.left), uint(wr.bottom - wr.top)}
+	client_size := [2]uint{cast(uint)cr.right, cast(uint)cr.bottom}
+
+	// NOTE: if .Maximized is present, this won't save centered position to be restored later. Seems like a Windows bug to me.
+	if v, ok := pos.(Window_Pos_Variant); ok && v == .Centered {
+		area_pos, area_size := get_working_area()
+		pos: [2]int = area_pos
+		mid_pos := (area_size - window_size) / 2
+		pos.x += int(mid_pos.x)
+		pos.y += int(mid_pos.y)
+		win32.SetWindowPos(winid, nil, i32(pos.x), i32(pos.y), 0, 0, win32.SWP_NOSIZE | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE)
+	}
+
+	if .Maximized in flags {
+		win32.ShowWindow(winid, win32.SW_MAXIMIZE)
+	} else {
+		win32.ShowWindow(winid, win32.SW_SHOW)
+	}
 
 	is_focused := win32.GetForegroundWindow() == winid
 	win32.PostMessageW(winid, win32.WM_NCACTIVATE, cast(uintptr)is_focused, 0)
 
 	window^ = {
-		specific = {
-			id = winid,
-		},
-		rect = {
-			{cast(int)wr.left, cast(int)wr.top},
-			{cast(int)wr.right - cast(int)wr.left, cast(int)wr.bottom - cast(int)wr.top},
-		},
-		client = {
-			{cast(int)point.x, cast(int)point.y},
-			{cast(int)cr.right, cast(int)cr.bottom},
-		},
-		flags = flags, dec_w = dec_w, dec_h = dec_h,
+		pos = window_pos,
+		size = window_size,
+		client_size = client_size,
+		flags = flags,
+		dec_size = dec_size,
 		is_focused = is_focused,
 	}
 
+	// OS-specific
+	window.id = winid
 	window.icon = win32.LoadIconW(instance, win32.L("icon"))
 	if window.icon != nil {
 		win32.SetClassLongPtrW(winid, win32.GCLP_HICON, auto_cast cast(uintptr)window.icon)
 	}
-
 	window.main_fiber = win32.ConvertThreadToFiber(nil)
 	window.message_fiber = win32.CreateFiber(0, _message_fiber_proc, window.id)
 
@@ -182,12 +193,8 @@ _restore :: proc(window: ^Window) {
 _set_fullscreen :: proc(window: ^Window, fullscreen: bool) {
 	if !window.is_fullscreen {
 		window.old_style = cast(u32)win32.GetWindowLongPtrW(window.id, win32.GWL_STYLE)
-
-		rect: win32.RECT
-		point: win32.POINT
-		win32.GetClientRect(window.id, &rect)
-		win32.ClientToScreen(window.id, &point)
-		window.old_client = {{cast(int)point.x, cast(int)point.y}, {cast(int)rect.right, cast(int)rect.bottom}}
+		window.old_pos = window.pos
+		window.old_size = window.size
 	}
 
 	if fullscreen {
@@ -207,38 +214,32 @@ _set_fullscreen :: proc(window: ^Window, fullscreen: bool) {
 			win32.SWP_NOZORDER | win32.SWP_NOACTIVATE | win32.SWP_FRAMECHANGED,
 		)
 
-
 		window.is_fullscreen = true
 	} else {
 		win32.SetWindowLongPtrW(window.id, win32.GWL_STYLE, cast(int)window.old_style)
 
-		crect: win32.RECT = {
-			i32(window.old_client.pos[0]),
-			i32(window.old_client.pos[1]),
-			i32(window.old_client.pos[0] + window.old_client.size[0]),
-			i32(window.old_client.pos[1] + window.old_client.size[1]),
-		}
-		win32.AdjustWindowRect(&crect, window.old_style, false)
-		win32.SetWindowPos(window.id, nil, crect.left, crect.top, crect.right - crect.left, crect.bottom - crect.top, win32.SWP_NOZORDER | win32.SWP_NOACTIVATE | win32.SWP_FRAMECHANGED)
+		win32.SetWindowPos(
+			window.id, nil,
+			cast(i32)window.old_pos.x, cast(i32)window.old_pos.y,
+			cast(i32)window.old_size[0], cast(i32)window.old_size[1],
+			win32.SWP_NOZORDER | win32.SWP_NOACTIVATE | win32.SWP_FRAMECHANGED,
+		)
 
 		window.is_fullscreen = false
 	}
 }
 
-_get_working_area :: #force_inline proc() -> Rect {
+_get_working_area :: #force_inline proc() -> (pos: [2]int, size: [2]uint) {
 	winrect: win32.RECT
 	win32.SystemParametersInfoW(win32.SPI_GETWORKAREA, 0, &winrect, 0)
-	return {
-		{cast(int)winrect.left, cast(int)winrect.top},
-		{cast(int)(winrect.right - winrect.left), cast(int)(winrect.bottom - winrect.top)},
-	}
+	return {cast(int)winrect.left, cast(int)winrect.top}, {uint(winrect.right - winrect.left), uint(winrect.bottom - winrect.top)}
 }
 
 _move :: proc(window: ^Window, pos: [2]int) {
 	win32.SetWindowPos(window.id, nil, i32(pos.x), i32(pos.y), 0, 0, win32.SWP_NOSIZE | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE)
 }
 
-_resize :: proc(window: ^Window, size: [2]int) {
+_resize :: proc(window: ^Window, size: [2]uint) {
 	w, h := i32(size[0]), i32(size[1])
 	crect: win32.RECT = {0, 0, w, h}
 
@@ -262,7 +263,7 @@ _set_resizable :: proc(window: ^Window, resizable: bool) {
 	win32.SetWindowLongPtrW(winid, win32.GWL_STYLE, cast(int)style)
 }
 
-_display_pixels :: proc(window: ^Window, pixels: [][4]u8, pixels_size: [2]int, dest: Rect) {
+_display_pixels :: proc(window: ^Window, pixels: [][4]u8, pixels_size: [2]uint, pos: [2]int, size: [2]uint) {
 	dc := win32.GetDC(window.id)
 	defer win32.ReleaseDC(window.id, dc)
 
@@ -282,12 +283,12 @@ _display_pixels :: proc(window: ^Window, pixels: [][4]u8, pixels_size: [2]int, d
 
 	{ // clear
 		dx, dy, dr, db, cw, ch: i32
-		dx = i32(dest.x)
-		dy = i32(dest.y)
-		dr = dx + i32(dest.size[0])
-		db = dy + i32(dest.size[1])
-		cw = i32(window.client.size[0])
-		ch = i32(window.client.size[1])
+		dx = i32(pos.x)
+		dy = i32(pos.y)
+		dr = dx + i32(size[0])
+		db = dy + i32(size[1])
+		cw = i32(window.client_size[0])
+		ch = i32(window.client_size[1])
 
 		if dx > 0 do win32.PatBlt(dc, 0, 0, dx, ch, win32.PATCOPY)
 		if dr < cw do win32.PatBlt(dc, dr, 0, cw - dr, ch, win32.PATCOPY)
@@ -297,7 +298,7 @@ _display_pixels :: proc(window: ^Window, pixels: [][4]u8, pixels_size: [2]int, d
 
 	win32.StretchDIBits(
 		dc,
-		cast(i32)dest.x, cast(i32)dest.y, cast(i32)dest.size[0], cast(i32)dest.size[1],
+		cast(i32)pos.x, cast(i32)pos.y, cast(i32)size[0], cast(i32)size[1],
 		0, 0, cast(i32)pixels_size[0], cast(i32)pixels_size[1], raw_data(pixels),
 		&bitmap_info, win32.DIB_RGB_COLORS, win32.SRCCOPY,
 	)
