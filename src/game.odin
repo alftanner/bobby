@@ -12,6 +12,8 @@ import "core:os"
 import "core:os/os2"
 import "core:path/filepath"
 import "core:mem"
+import "core:math"
+import "core:math/linalg"
 import "core:fmt"
 import "core:encoding/json"
 
@@ -19,6 +21,11 @@ import spl "spl"
 
 GAME_TITLE :: "Bobby Carrot Remastered"
 TIMER_FAIL :: "Failed to create a timer. I would use sleep() instead, but @mmozeiko said that sleeping is bad."
+
+Rect :: struct {
+	using pos: [2]int,
+	size: [2]int,
+}
 
 Renderer :: enum {
 	GL,
@@ -492,6 +499,15 @@ logger_proc :: proc(data: rawptr, level: runtime.Logger_Level, text: string, opt
 	}
 }
 
+array_cast :: linalg.array_cast
+
+fract :: proc(x: f32) -> f32 {
+	if x >= 0 {
+		return x - #force_inline math.trunc(x)
+	}
+	return #force_inline math.trunc(-x) + x
+}
+
 measure_or_draw_text :: proc(
 	renderer: Renderer,
 	t: ^Texture2D,
@@ -705,7 +721,8 @@ load_texture :: proc(data: []byte) -> (t: Texture2D) {
 
 	pixels := mem.slice_data_cast([]image.RGBA_Pixel, bytes.buffer_to_bytes(&img.pixels))
 	for p, i in pixels {
-		t.pixels[i] = platform_color(p)
+		t.pixels[i].rgb = platform_color(p.rgb)
+		t.pixels[i].a = p.a
 	}
 
 	return
@@ -1986,11 +2003,11 @@ update_world :: proc(t: ^thread.Thread) {
 	}
 }
 
-get_buffer_scale :: proc(client_w, client_h: i32) -> int {
-	scale := 1
+get_buffer_scale :: proc(client_size: [2]uint) -> uint {
+	scale := uint(1)
 	for {
 		scale += 1
-		if BUFFER_W * scale > cast(int)client_w || BUFFER_H * scale > cast(int)client_h {
+		if BUFFER_W * scale > client_size[0] || BUFFER_H * scale > client_size[1] {
 			scale -= 1
 			break
 		}

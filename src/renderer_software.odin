@@ -4,7 +4,6 @@ import "core:fmt"
 import "core:math"
 import "core:time"
 import "core:sync"
-import "core:slice"
 import "core:image"
 import "core:strconv"
 import "core:container/small_array"
@@ -62,7 +61,7 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		cache_slow_redraw = true
 	}
 
-	diff: [2]f32 = {f32(TILES_W - local_level.size[0]), f32(TILES_H - local_level.size[1])}
+	diff := array_cast([2]int{TILES_W, TILES_H} - local_level.size, f32)
 
 	player_pos: [2]f32
 	frame_delta := get_frame_delta(previous_tick)
@@ -110,9 +109,7 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		}
 
 		if !scene_redraw {
-			lvl_offset: [2]int
-			lvl_offset.x = int(offset.x * TILE_SIZE)
-			lvl_offset.y = int(offset.y * TILE_SIZE)
+			lvl_offset := array_cast(offset * TILE_SIZE, int)
 
 			// draw updated tiles to scene texture
 			for tile_idx in small_array.pop_back_safe(&tiles_updated) {
@@ -140,18 +137,14 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	if scene_redraw {
 		switch local_world.scene {
 		case .Game:
-			lvl_offset: [2]int
-			lvl_offset.x = int(offset.x * TILE_SIZE)
-			lvl_offset.y = int(offset.y * TILE_SIZE)
+			lvl_offset := array_cast(offset * TILE_SIZE, int)
 
 			if draw_world_background { // TODO: only draw needed parts, not the entire thing
 				bg_pos: [2]int
 				bg_pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
 				bg_pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
 				for y in 0..=TILES_H do for x in 0..=TILES_W {
-					pos: [2]int = {x, y}
-					pos *= TILE_SIZE
-					pos -= bg_pos
+					pos := ([2]int{x, y} * TILE_SIZE) - bg_pos
 					software_draw_from_texture(&scene_texture, pos, textures[.Grass], {{}, {TILE_SIZE, TILE_SIZE}})
 				}
 			}
@@ -166,29 +159,28 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 			} else {
 				bg_texture := textures[manu_campaign_textures[local_settings.campaign]]
 				for y in 0..<TILES_H do for x in 0..<TILES_W {
-					pos: [2]int = {x, y}
-					pos *= TILE_SIZE
+					pos := [2]int{x, y} * TILE_SIZE
 					software_draw_from_texture(&scene_texture, pos, bg_texture, {{}, {TILE_SIZE, TILE_SIZE}})
 				}
 			}
 			software_draw_rect(&scene_texture, {{}, scene_texture.size}, {0, 0, 0, 0xAA})
 		case .Intro:
-			slice.fill(scene_texture.pixels, BLACK)
+			texture_clear(&scene_texture, BLACK)
 
 			off := (scene_texture.size - INTRO_SPLASH.size) / 2
 			software_draw_from_texture(&scene_texture, off, textures[.Splashes], INTRO_SPLASH)
 			software_draw_rect(&scene_texture, {off, INTRO_SPLASH.size}, {0, 0, 0, intro_alpha})
 		case .End:
-			slice.fill(scene_texture.pixels, BLACK)
+			texture_clear(&scene_texture, BLACK)
 
 			off := (scene_texture.size - END_SPLASH.size) / 2
 			software_draw_from_texture(&scene_texture, off, textures[.Splashes], END_SPLASH)
 		case .Credits:
-			slice.fill(scene_texture.pixels, BLACK)
+			texture_clear(&scene_texture, BLACK)
 
 			software_draw_credits(&scene_texture, local_settings.language)
 		case .None:
-			slice.fill(scene_texture.pixels, BLACK)
+			texture_clear(&scene_texture, BLACK)
 		}
 
 		canvas_redraw = true
@@ -222,11 +214,11 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	if local_world.scene == .Game {
 		// draw player
 		if !local_level.ended || (local_level.ended && local_world.player.fading.state) {
-			pos := (player_pos + offset) * TILE_SIZE
-			px := int(pos.x) + local_world.player.sprite.offset.x
-			py := int(pos.y) + local_world.player.sprite.offset.y
-			software_draw_from_texture(&canvas, {px, py}, textures[.Atlas], local_world.player.sprite)
-			small_array.push_back(&canvas_cache, Rect{{px, py}, local_world.player.sprite.size})
+			pos := array_cast((player_pos + offset) * TILE_SIZE, int)
+			ppos := pos + local_world.player.sprite.offset
+
+			software_draw_from_texture(&canvas, ppos, textures[.Atlas], local_world.player.sprite)
+			small_array.push_back(&canvas_cache, Rect{ppos, local_world.player.sprite.size})
 		}
 
 		// HUD
@@ -406,13 +398,11 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 }
 
 software_display :: proc(canvas: ^Texture2D) {
-	client_size := get_from_i64(&global_state.client_size)
-	scale := get_buffer_scale(client_size[0], client_size[1])
-	buf_w, buf_h := BUFFER_W * scale, BUFFER_H * scale
-	off_x := (cast(int)client_size[0] - buf_w) / 2
-	off_y := (cast(int)client_size[1] - buf_h) / 2
-	canvas_size: [2]uint = {cast(uint)canvas.size[0], cast(uint)canvas.size[1]}
-	spl.display_pixels(&window, canvas.pixels, canvas_size, {off_x, off_y}, {uint(buf_w), uint(buf_h)})
+	client_size := array_cast(get_from_i64(&global_state.client_size), uint)
+	scale := get_buffer_scale(client_size)
+	buf_size := CANVAS_SIZE * int(scale)
+	off := (array_cast(client_size, int) - buf_size) / 2
+	spl.display_pixels(&window, canvas.pixels, array_cast(canvas.size, uint), off, array_cast(buf_size, uint))
 }
 
 software_draw_scoreboard :: proc(t: ^Texture2D, q: ^Region_Cache, labels: []Text_Label, page: int) {
@@ -530,10 +520,10 @@ software_draw_credits :: proc(t: ^Texture2D, language: Language) {
 }
 
 software_draw_stats :: proc(t: ^Texture2D, q: ^Region_Cache) {
-	offset: [2]int = {t.size[0], t.size[1]}
+	offset := t.size
 	offset -= 2
 
-	pos: [2]int = offset
+	pos := offset
 	draw_stats :: proc(t: ^Texture2D, pos: ^[2]int, format: string, args: ..any) -> Rect {
 		tbuf: [64]byte
 		text := fmt.bprintf(tbuf[:], format, ..args)
@@ -563,7 +553,7 @@ software_draw_text :: #force_inline proc(
 }
 
 // blend foreground pixel with alpha onto background
-software_blend_pixel :: proc(bg: ^Color, fg: Color) {
+software_blend_pixel :: proc(bg: ^Color4, fg: Color4) {
 	// NOTE: these do not necesserily correspond to RGBA mapping, colors can be in any order, as long as alpha is at the same place
 	AMASK    :: 0xFF000000
 	GMASK    :: 0x0000FF00
@@ -581,7 +571,7 @@ software_blend_pixel :: proc(bg: ^Color, fg: Color) {
 	p1^ = (rb & RBMASK) | (ag & AGMASK)
 }
 
-software_pixel_mod :: proc(dst: ^Color, mod: Color) {
+software_pixel_mod :: #force_inline proc(dst: ^Color4, mod: Color3) {
 	dst.r = u8(cast(f32)dst.r * (cast(f32)mod.r / 255))
 	dst.g = u8(cast(f32)dst.g * (cast(f32)mod.g / 255))
 	dst.b = u8(cast(f32)dst.b * (cast(f32)mod.b / 255))
@@ -589,7 +579,7 @@ software_pixel_mod :: proc(dst: ^Color, mod: Color) {
 
 software_draw_from_texture :: proc(dst: ^Texture2D, pos: [2]int, src: Texture2D, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}) {
 	needs_mod := mod != {255, 255, 255}
-	mod_color := platform_color({mod.r, mod.g, mod.b, 0})
+	mod_color := platform_color(mod.rgb)
 
 	endx := min(pos.x + src_rect.size[0], dst.size[0])
 	endy := min(pos.y + src_rect.size[1], dst.size[1])
@@ -602,18 +592,19 @@ software_draw_from_texture :: proc(dst: ^Texture2D, pos: [2]int, src: Texture2D,
 		sp := (src_rect.y + spy) * src.size[0] + (src_rect.x + spx)
 		dp := y * dst.size[0] + x
 		src_pixel := src.pixels[sp]
-		if needs_mod do software_pixel_mod(&src_pixel, mod_color)
+		if needs_mod do software_pixel_mod(&src_pixel, mod_color.rgb)
 		software_blend_pixel(&dst.pixels[dp], src_pixel)
 	}
 }
 
 software_draw_rect :: proc(dst: ^Texture2D, rect: Rect, color: image.RGBA_Pixel) {
-	c := platform_color(color)
+	color := color
+	color.rgb = platform_color(color.rgb)
 	endx := min(rect.x + rect.size[0], dst.size[0])
 	endy := min(rect.y + rect.size[1], dst.size[1])
 
 	for y in max(0, rect.y)..<endy do for x in max(0, rect.x)..<endx {
 		dp := y * dst.size[0] + x
-		software_blend_pixel(&dst.pixels[dp], c)
+		software_blend_pixel(&dst.pixels[dp], color)
 	}
 }

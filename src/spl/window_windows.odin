@@ -2,6 +2,7 @@
 package spl
 
 import "core:container/small_array"
+import "core:math/linalg"
 import win32 "core:sys/windows"
 
 Event_Q :: small_array.Small_Array(128, Event)
@@ -11,7 +12,8 @@ Window_OS_Specific :: struct {
 	icon: win32.HICON,
 	main_fiber, message_fiber: rawptr,
 	old_style: u32,
-	old_pos, old_size: [2]int,
+	old_pos: [2]int,
+	old_size: [2]uint,
 	event_q: Event_Q,
 	processing_event: bool,
 }
@@ -124,15 +126,16 @@ _create :: proc(window: ^Window, title: string, pos: Window_Pos, size: Maybe([2]
 	win32.GetWindowRect(winid, &wr)
 	win32.GetClientRect(winid, &cr)
 	win32.ClientToScreen(winid, &point)
-	dec_size := [2]int{int(wr.right - wr.left - cr.right), int(wr.bottom - wr.top - cr.bottom)}
 	window_pos := [2]int{cast(int)wr.left, cast(int)wr.top}
-	window_size := [2]int{int(wr.right - wr.left), int(wr.bottom - wr.top)}
-	client_size := [2]int{cast(int)cr.right, cast(int)cr.bottom}
+	window_size := [2]uint{uint(wr.right - wr.left), uint(wr.bottom - wr.top)}
+	client_size := [2]uint{cast(uint)cr.right, cast(uint)cr.bottom}
+	dec_size := [2]uint{uint(wr.right - wr.left - cr.right), uint(wr.bottom - wr.top - cr.bottom)}
 
 	// NOTE: if .Maximized is present, this won't save centered position to be restored later. Seems like a Windows bug to me.
 	if v, ok := pos.(Window_Pos_Variant); ok && v == .Centered {
 		area_pos, area_size := get_working_area()
-		mid_pos := (area_size - window_size) / 2
+
+		mid_pos := (linalg.array_cast(area_size, int) - linalg.array_cast(window_size, int)) / 2
 		pos := area_pos + mid_pos
 		win32.SetWindowPos(winid, nil, i32(pos.x), i32(pos.y), 0, 0, win32.SWP_NOSIZE | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE)
 	}
@@ -226,17 +229,17 @@ _set_fullscreen :: proc(window: ^Window, fullscreen: bool) {
 	}
 }
 
-_get_working_area :: #force_inline proc() -> (pos: [2]int, size: [2]int) {
+_get_working_area :: #force_inline proc() -> (pos: [2]int, size: [2]uint) {
 	winrect: win32.RECT
 	win32.SystemParametersInfoW(win32.SPI_GETWORKAREA, 0, &winrect, 0)
-	return {cast(int)winrect.left, cast(int)winrect.top}, {int(winrect.right - winrect.left), int(winrect.bottom - winrect.top)}
+	return {cast(int)winrect.left, cast(int)winrect.top}, {uint(winrect.right - winrect.left), uint(winrect.bottom - winrect.top)}
 }
 
 _move :: proc(window: ^Window, pos: [2]int) {
 	win32.SetWindowPos(window.id, nil, i32(pos.x), i32(pos.y), 0, 0, win32.SWP_NOSIZE | win32.SWP_NOZORDER | win32.SWP_NOACTIVATE)
 }
 
-_resize :: proc(window: ^Window, size: [2]int) {
+_resize :: proc(window: ^Window, size: [2]uint) {
 	w, h := i32(size[0]), i32(size[1])
 	crect: win32.RECT = {0, 0, w, h}
 

@@ -1,30 +1,27 @@
 package main
 
 import "core:mem"
+import "core:slice"
 import "core:image"
 
-WHITE  := platform_color({255, 255, 255, 255})
-BLACK  := platform_color({0,   0,   0,   255})
-RED    := platform_color({237, 28,  36,  255})
-GREEN  := platform_color({28,  237, 36,  255})
-BLUE   := platform_color({63,  72,  204, 255})
-YELLOW := platform_color({255, 255, 72,  255})
-ORANGE := platform_color({255, 127, 39,  255})
+WHITE  :: image.RGB_Pixel{255, 255, 255}
+BLACK  :: image.RGB_Pixel{0,   0,   0}
+RED    :: image.RGB_Pixel{237, 28,  36}
+GREEN  :: image.RGB_Pixel{28,  237, 36}
+BLUE   :: image.RGB_Pixel{63,  72,  204}
+YELLOW :: image.RGB_Pixel{255, 255, 72}
+ORANGE :: image.RGB_Pixel{255, 127, 39}
 
 Flip :: enum {
 	Horizontal,
 	Vertical,
 }
 
-Rect :: struct {
-	using pos: [2]int,
-	size: [2]int,
-}
-
-Color :: [4]u8
+Color3 :: [3]u8
+Color4 :: [4]u8
 
 Texture2D :: struct {
-	pixels: []Color,
+	pixels: []Color4,
 	size: [2]int,
 	allocator: mem.Allocator,
 }
@@ -32,7 +29,7 @@ Texture2D :: struct {
 texture_make :: proc(w, h: int, allocator := context.allocator) -> (t: Texture2D) {
 	t.size = {w, h}
 	t.allocator = allocator
-	t.pixels = make([]Color, t.size[0] * t.size[1], t.allocator)
+	t.pixels = make([]Color4, t.size[0] * t.size[1], t.allocator)
 	return
 }
 
@@ -41,9 +38,16 @@ texture_destroy :: proc(t: ^Texture2D) {
 	t^ = {}
 }
 
-platform_color :: #force_inline proc(p: image.RGBA_Pixel) -> Color {
+texture_clear :: proc(t: ^Texture2D, color: Color3) {
+	ccol: Color4
+	ccol.rgb = platform_color(color)
+	ccol.a = 255
+	slice.fill(t.pixels, ccol)
+}
+
+platform_color :: #force_inline proc(p: image.RGB_Pixel) -> Color3 {
 	when ODIN_OS == .Windows {
-		return p.bgra
+		return p.bgr
 	} else {
 		return p
 	}

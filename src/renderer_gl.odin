@@ -69,13 +69,12 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		previous_tick = global_state.previous_tick
 	}
 
-	client_size := get_from_i64(&global_state.client_size)
-	scale := get_buffer_scale(client_size[0], client_size[1])
+	client_size := array_cast(get_from_i64(&global_state.client_size), uint)
+	scale := get_buffer_scale(client_size)
 	{
-		buf_size := CANVAS_SIZE * scale
-		off_x := (int(client_size[0]) - buf_size[0]) / 2
-		off_y := (int(client_size[1]) - buf_size[1]) / 2
-		gl_set_viewport({{off_x, off_y}, buf_size})
+		buf_size := CANVAS_SIZE * int(scale)
+		off := (array_cast(client_size, int) - buf_size) / 2
+		gl_set_viewport({off, buf_size})
 		gl_state.scale = f32(scale)
 	}
 
@@ -93,7 +92,7 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	case .Game, .Pause_Menu:
 		draw_world_background: bool
 		offset = {}
-		diff: [2]f32 = {f32(TILES_W - local_level.size[0]), f32(TILES_H - local_level.size[1])}
+		diff := array_cast([2]int{TILES_W, TILES_H} - local_level.size, f32)
 
 		player_pos: [2]f32
 		frame_delta := get_frame_delta(previous_tick)
@@ -129,14 +128,12 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 			}
 		}
 
-		lvl_offset: [2]int
-		lvl_offset.x = int(offset.x * TILE_SIZE)
-		lvl_offset.y = int(offset.y * TILE_SIZE)
+		lvl_offset := array_cast(offset * TILE_SIZE, int)
 
 		if draw_world_background { // TODO: only draw needed parts, not the entire thing?
 			bg_pos: [2]int
-			bg_pos.x = int(abs(offset.x - f32(int(offset.x))) * TILE_SIZE)
-			bg_pos.y = int(abs(offset.y - f32(int(offset.y))) * TILE_SIZE)
+			bg_pos.x = int(abs(fract(offset.x)) * TILE_SIZE)
+			bg_pos.y = int(abs(fract(offset.y)) * TILE_SIZE)
 			gl_draw_from_texture({}, .Grass, {bg_pos, CANVAS_SIZE})
 		}
 		for _, idx in local_level.tiles {
@@ -147,10 +144,9 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 
 		// draw player
 		if !local_level.ended || (local_level.ended && local_world.player.fading.state) {
-			pos := (player_pos + offset) * TILE_SIZE
-			px := int(pos.x) + local_world.player.sprite.offset.x
-			py := int(pos.y) + local_world.player.sprite.offset.y
-			gl_draw_from_texture({px, py}, .Atlas, local_world.player.sprite)
+			pos := array_cast((player_pos + offset) * TILE_SIZE, int)
+			ppos := pos + local_world.player.sprite.offset
+			gl_draw_from_texture(ppos, .Atlas, local_world.player.sprite)
 		}
 
 		// HUD
@@ -326,7 +322,7 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 
 	if local_settings.show_stats {
 		calculate_stats()
-		gl_set_viewport({{}, {int(client_size[0]), int(client_size[1])}})
+		gl_set_viewport({{}, array_cast(client_size, int)})
 		gl_state.scale = f32(scale)
 		gl_draw_stats()
 	}
@@ -414,7 +410,7 @@ get_rect_vertex :: #force_inline proc(i: uint) -> (hor, ver: int) {
 	return
 }
 
-gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}) {
+gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, tex_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}) {
 	color := image.RGBA_Pixel{mod.r, mod.g, mod.b, 255}
 
 	if gl_state.texture != auto_cast textures_index[tex] {
@@ -432,13 +428,11 @@ gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: b
 	gl_begin()
 	gl_set_color(color)
 
-	src := textures[tex]
+	c_hor: [2]f32 = {f32(tex_rect.x), f32(tex_rect.x + tex_rect.size[0])} / f32(textures[tex].size[0])
+	c_ver: [2]f32 = {f32(tex_rect.y), f32(tex_rect.y + tex_rect.size[1])} / f32(textures[tex].size[1])
 
-	c_hor: [2]f32 = {f32(src_rect.x), f32(src_rect.x + src_rect.size[0])} / f32(src.size[0])
-	c_ver: [2]f32 = {f32(src_rect.y), f32(src_rect.y + src_rect.size[1])} / f32(src.size[1])
-
-	v_hor: [2]f32 = {f32(pos.x), f32(pos.x + src_rect.size[0])}
-	v_ver: [2]f32 = {f32(pos.y), f32(pos.y + src_rect.size[1])}
+	v_hor: [2]f32 = {f32(pos.x), f32(pos.x + tex_rect.size[0])}
+	v_ver: [2]f32 = {f32(pos.y), f32(pos.y + tex_rect.size[1])}
 
 	if normalize_vertices(&v_hor, &v_ver) {
 		gl_state.culled += 1
