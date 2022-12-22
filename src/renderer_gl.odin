@@ -33,7 +33,6 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	@static local_settings: Settings
 	// other state
 	@static previous_tick: time.Tick
-	@static tick_time: time.Duration
 	@static offset: [2]f32
 
 	if !was_init {
@@ -71,7 +70,6 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		local_world = world
 		local_settings = settings
 		previous_tick = global_state.previous_tick
-		tick_time = sync.atomic_load(&global_state.tick_time)
 	}
 
 	client_size := get_from_i64(&global_state.client_size)
@@ -101,7 +99,7 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		diff: [2]f32 = {f32(TILES_W - local_level.size[0]), f32(TILES_H - local_level.size[1])}
 
 		player_pos: [2]f32
-		frame_delta := get_frame_delta(previous_tick, tick_time)
+		frame_delta := get_frame_delta(previous_tick)
 		@static prev_player_delta: f32
 		if local_world.scene == .Pause_Menu || (local_world.player.walking.state && local_world.player.dying.state) {
 			frame_delta = prev_player_delta
@@ -160,18 +158,21 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 
 		// HUD
 		if !local_level.ended {
+			milliseconds := local_level.score.time
+			seconds := milliseconds / 1000
+			minutes := seconds / 60
 			// left part
 			{
 				tbuf: [8]byte
 				time_str := fmt.bprintf(
 					tbuf[:], "{:02i}:{:02i}",
-					int(time.duration_minutes(local_level.score.time)),
-					int(time.duration_seconds(local_level.score.time)) % 60,
+					int(minutes),
+					int(seconds) % 60,
 				)
 				gl_draw_text(hud_font, time_str, {2, 2})
 			}
 			// level begin screen
-			if time.duration_seconds(local_level.score.time) < 2 {
+			if seconds < 2 {
 				tbuf: [16]byte
 				level_str := fmt.bprintf(tbuf[:], "{} {}", language_strings[local_settings.language][.Level], local_level.current + 1)
 				size := measure_text(general_font, level_str)
@@ -244,12 +245,16 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 			success_x := (CANVAS_SIZE[0] - success.size[0]) / 2
 			total_h += success.size[1] + (general_font.glyph_size[1] * 2)
 
+			milliseconds := local_level.score.time
+			seconds := milliseconds / 1000
+			minutes := seconds / 60
+
 			tbuf: [64]byte
-			time_str := fmt.bprintf(tbuf[:32], "{}: {:02i}:{:02i}:{:02i}",
+			time_str := fmt.bprintf(tbuf[:32], "{}: {:02i}:{:02i}:{:03i}",
 				language_strings[local_settings.language][.Time],
-				int(time.duration_minutes(local_level.score.time)),
-				int(time.duration_seconds(local_level.score.time)) % 60,
-				int(time.duration_milliseconds(local_level.score.time)) % 60,
+				int(minutes),
+				int(seconds) % 60,
+				int(milliseconds) % 1000,
 			)
 			time_x, time_h: int
 			{
@@ -296,7 +301,7 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	case .Intro:
 		off := (CANVAS_SIZE - INTRO_SPLASH.size) / 2
 		gl_draw_from_texture(off, .Splashes, INTRO_SPLASH)
-		intro_alpha := get_intro_alpha(local_world.intro, get_frame_delta(previous_tick, tick_time))
+		intro_alpha := get_intro_alpha(local_world.intro, get_frame_delta(previous_tick))
 		gl_draw_rect({off, INTRO_SPLASH.size}, {0, 0, 0, intro_alpha})
 	case .End:
 		off := (CANVAS_SIZE - END_SPLASH.size) / 2
@@ -317,7 +322,7 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		gl_draw_scoreboard(small_array.slice(&local_world.scoreboard), local_world.scoreboard_page)
 	}
 
-	fade_alpha := get_fade_alpha(local_world.fade, get_frame_delta(previous_tick, tick_time))
+	fade_alpha := get_fade_alpha(local_world.fade, get_frame_delta(previous_tick))
 	if fade_alpha != 0 {
 		gl_draw_rect({{}, CANVAS_SIZE}, {0, 0, 0, fade_alpha})
 	}
@@ -594,20 +599,24 @@ gl_draw_scoreboard :: proc(labels: []Text_Label, page: int) {
 }
 
 gl_draw_stats :: proc() {
-	tbuf: [256]byte
-	text := fmt.bprintf(
-		tbuf[:],
-`{}{}/{} culled
-{}FPS {}ms last
-{}TPS {}ms last`,
-		settings.renderer, "/VSYNC" if settings.vsync else "", gl_state.culled,
-		u32(math.round(global_state.fps.average)), global_state.last_frame.average,
-		u32(math.round(global_state.tps.average)), global_state.last_update.average,
-	)
+	offset: [2]f32 = {f32(gl_state.viewport.size[0]), f32(gl_state.viewport.size[1])}
+	offset /= gl_state.scale
+	offset -= 2
 
-	pos: [2]int
-	pos.x = int(f32(gl_state.viewport.size[0]) / gl_state.scale) - 2
-	pos.y = int(f32(gl_state.viewport.size[1]) / gl_state.scale) - 2
-	pos -= measure_text(general_font, text)
-	gl_draw_text(general_font, text, pos)
+	pos: [2]f32 = offset
+	draw_stats :: proc(pos: ^[2]f32, format: string, args: ..any) {
+		tbuf: [64]byte
+		text := fmt.bprintf(tbuf[:], format, ..args)
+
+		size := measure_text(general_font, text)
+		pos.x -= f32(size[0])
+		pos.y -= f32(size[1])
+		gl_draw_text(general_font, text, {int(pos.x), int(pos.y)})
+	}
+
+	draw_stats(&pos, "{}TPS {}ms last", u32(math.round(global_state.tps.average)), global_state.last_update.average)
+	pos.x = offset.x
+	draw_stats(&pos, "{}FPS {}ms last", u32(math.round(global_state.fps.average)), global_state.last_frame.average)
+	pos.x = offset.x
+	draw_stats(&pos, "{}{}/{} culled", settings.renderer, "/VSYNC" if settings.vsync else "", gl_state.culled)
 }

@@ -26,7 +26,7 @@ Renderer :: enum {
 }
 
 Score :: struct {
-	time: time.Duration,
+	time: f32, // in milliseconds
 	steps: int,
 }
 
@@ -466,26 +466,7 @@ save_to_i64 :: #force_inline proc(p: ^i64, a: [2]i32) {
 get_from_i64 :: #force_inline proc(p: ^i64) -> [2]i32 {
 	return transmute([2]i32)sync.atomic_load(p)
 }
-/*
-save_to_i32 :: #force_inline proc(p: ^i32, a: [2]i16) {
-	sync.atomic_store(p, transmute(i32)a)
-}
 
-get_from_i32 :: #force_inline proc(p: ^i32) -> [2]i16 {
-	return transmute([2]i16)sync.atomic_load(p)
-}
-
-limit_frame :: proc(frame_time: time.Duration, frame_limit: uint) {
-	if frame_limit <= 0 do return
-
-	ms_per_frame := time.Duration((1000.0 / f32(frame_limit)) * f32(time.Millisecond))
-	to_sleep := ms_per_frame - frame_time
-
-	if to_sleep <= 0 do return
-
-	time.sleep(to_sleep)
-}
-*/
 assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Code_Location) -> ! {
 	error := fmt.tprintf("{}({}:{}) {}", loc.file_path, loc.line, loc.column, prefix)
 	if len(message) > 0 {
@@ -510,17 +491,7 @@ logger_proc :: proc(data: rawptr, level: runtime.Logger_Level, text: string, opt
 		fmt.eprintf("[{}] {}\n", level, text)
 	}
 }
-/*
-cycles_lap_time :: proc(prev: ^u64) -> u64 {
-	cycles: u64
-	cycle_count := time.read_cycle_counter()
-	if prev^ != 0 {
-		cycles = cycle_count - prev^
-	}
-	prev^ = cycle_count
-	return cycles
-}
-*/
+
 measure_or_draw_text :: proc(
 	renderer: Renderer,
 	t: ^Texture2D,
@@ -595,16 +566,16 @@ get_fade_alpha :: proc(fade: Animation, frame_delta: f32) -> u8 {
 	SECTION_LENGTH :: FADE_LENGTH / 2
 
 	section := fade.timer / SECTION_LENGTH
-	time_in_section := fade.timer % SECTION_LENGTH
+	time_in_section := f32(fade.timer % SECTION_LENGTH)
 
-	delta := (f32(time_in_section) + frame_delta) / SECTION_LENGTH
+	delta := (time_in_section + frame_delta) / SECTION_LENGTH
 
 	alpha: u8
 	switch section {
 	case 0: // fade-out 0-255
-		alpha = u8(delta * 255)
+		alpha = u8(clamp(delta * 255, 0, 255))
 	case 1: // fade-in 255-0
-		alpha = 255 - u8(delta * 255)
+		alpha = 255 - u8(clamp(delta * 255, 0, 255))
 	case:
 		alpha = 0
 	}
@@ -616,14 +587,14 @@ get_intro_alpha :: proc(intro: Animation, frame_delta: f32) -> u8 {
 	SECTION_LENGTH :: FADE_LENGTH
 
 	section := intro.timer / SECTION_LENGTH
-	time_in_section := intro.timer % SECTION_LENGTH
+	time_in_section := f32(intro.timer % SECTION_LENGTH)
 
-	delta := (f32(time_in_section) + frame_delta) / SECTION_LENGTH
+	delta := (time_in_section + frame_delta) / SECTION_LENGTH
 
 	alpha: u8
 	switch section {
 	case 0: // fade-in 255-0
-		alpha = 255 - u8(delta * 255)
+		alpha = 255 - u8(clamp(delta * 255, 0, 255))
 	case:
 		alpha = 0
 	}
@@ -633,7 +604,7 @@ get_intro_alpha :: proc(intro: Animation, frame_delta: f32) -> u8 {
 
 interpolate_tile_position :: #force_inline proc(p: Player, frame_delta: f32) -> [2]f32 {
 	if p.walking.state || p.walking.timer != 0 {
-		ANIM_TIME :: f32(WALKING_ANIM_FRAME_LEN * WALKING_ANIM_LEN) - 1
+		ANIM_TIME :: f32(WALKING_ANIM_FRAME_LEN * WALKING_ANIM_LEN)
 		delta := (f32(p.walking.timer) + frame_delta) / ANIM_TIME
 		// even if frame was too long after the tick, we don't want to overextend the position any further than it can normally be
 		delta = min(delta, 1)
@@ -648,16 +619,7 @@ interpolate_tile_position :: #force_inline proc(p: Player, frame_delta: f32) -> 
 
 	return {f32(p.x), f32(p.y)}
 }
-/*
-interpolate_smooth_position :: #force_inline proc(p: Player, frame_delta: f32) -> [2]f32 {
-	diff := p.pos - p.prev
-	x_delta := frame_delta * f32(diff.x)
-	y_delta := frame_delta * f32(diff.y)
-	x := f32(p.prev.x) + x_delta
-	y := f32(p.prev.y) + y_delta
-	return {x, y}
-}
-*/
+
 get_walking_sprite :: proc(frame: uint) -> Sprite_Offset {
 	sprite := walking_animation[frame]
 	#partial switch world.player.direction {
@@ -733,22 +695,7 @@ get_sprite_from_pos :: proc(pos: [2]int, level: Level) -> Rect {
 
 	return sprite
 }
-/*
-is_inside_rect :: #force_inline proc(p: [2]int, r: Rect) -> bool {
-	return p.x >= r.x && p.x < r.x + r.size[0] && p.y >= r.y && p.y < r.y + r.size[1]
-}
 
-rect_intersection :: proc(r1, r2: Rect) -> Rect {
-	pos: [2]int = {max(r1.x, r2.x), max(r1.y, r2.y)}
-	right_x := min(r1.x + r1.size[0], r2.x + r2.size[0])
-	bottom_y := min(r1.y + r1.size[1], r2.y + r2.size[1])
-
-	if pos.x < right_x && pos.y < bottom_y {
-		return {pos, {right_x - pos.x, bottom_y - pos.y}}
-	}
-	return {}
-}
-*/
 load_texture :: proc(data: []byte) -> (t: Texture2D) {
 	img, err := image.load(data)
 	assert(err == nil, fmt.tprint(err))
@@ -866,8 +813,10 @@ copy_level :: proc(dst, src: ^Level, q: ^Tile_Queue) -> (changed: bool) {
 	return
 }
 
-get_frame_delta :: proc(previous_tick: time.Tick, tick_time: time.Duration) -> f32 {
-	return f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now())) / time.duration_milliseconds(tick_time))
+get_frame_delta :: proc(previous_tick: time.Tick) -> f32 {
+	TICK_TIME :: 1000/f32(TPS)
+
+	return f32(time.duration_milliseconds(time.tick_diff(previous_tick, time.tick_now()))) / TICK_TIME
 }
 
 render :: proc(t: ^thread.Thread) {
@@ -1358,10 +1307,15 @@ show_scoreboard :: proc() {
 	for score, lvl in scoreboard {
 		lvl_idx := lvl + 1
 		label: Text_Label
-		label_printf(&label, "{:02i}| {:02i}:{:02i}:{:02i}; {:02i} {}", lvl_idx,
-			int(time.duration_minutes(score.time)),
-			int(time.duration_seconds(score.time)) % 60,
-			int(time.duration_milliseconds(score.time)) % 60,
+
+		milliseconds := score.time
+		seconds := milliseconds / 1000
+		minutes := seconds / 60
+
+		label_printf(&label, "{:02i}| {:02i}:{:02i}:{:03i}; {:02i} {}", lvl_idx,
+			int(minutes),
+			int(seconds) % 60,
+			int(milliseconds) % 1000,
 			score.steps,
 			language_strings[settings.language][.Scoreboard_Steps],
 		)
@@ -1898,7 +1852,7 @@ update_game :: proc() {
 
 	// track level time
 	if !world_level.ended {
-		world_level.score.time += sync.atomic_load(&global_state.tick_time)
+		world_level.score.time += 1000/f32(TPS)
 	}
 }
 

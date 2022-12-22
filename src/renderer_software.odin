@@ -22,7 +22,6 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	@static tiles_updated: Tile_Queue
 	// other state
 	@static previous_tick: time.Tick
-	@static tick_time: time.Duration
 	@static offset: [2]f32
 	@static intro_alpha: u8
 
@@ -52,7 +51,6 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		local_world = world
 		local_settings = settings
 		previous_tick = global_state.previous_tick
-		tick_time = sync.atomic_load(&global_state.tick_time)
 	}
 
 	if !was_init || old_world.scene != local_world.scene || old_settings.campaign != local_settings.campaign {
@@ -67,7 +65,7 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	diff: [2]f32 = {f32(TILES_W - local_level.size[0]), f32(TILES_H - local_level.size[1])}
 
 	player_pos: [2]f32
-	frame_delta := get_frame_delta(previous_tick, tick_time)
+	frame_delta := get_frame_delta(previous_tick)
 	@static prev_player_delta: f32
 	if local_world.scene == .Pause_Menu || (local_world.player.walking.state && local_world.player.dying.state) {
 		frame_delta = prev_player_delta
@@ -133,7 +131,7 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		}
 	case .Intro: // do not redraw the intro after alpha became 0
 		old_intro_alpha := intro_alpha
-		intro_alpha = get_intro_alpha(local_world.intro, get_frame_delta(previous_tick, tick_time))
+		intro_alpha = get_intro_alpha(local_world.intro, get_frame_delta(previous_tick))
 		if old_intro_alpha != 0 || intro_alpha != 0 {
 			scene_redraw = true
 		}
@@ -233,18 +231,21 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 
 		// HUD
 		if !local_level.ended {
+			milliseconds := local_level.score.time
+			seconds := milliseconds / 1000
+			minutes := seconds / 60
 			// left part
 			{
 				tbuf: [8]byte
 				time_str := fmt.bprintf(
 					tbuf[:], "{:02i}:{:02i}",
-					int(time.duration_minutes(local_level.score.time)),
-					int(time.duration_seconds(local_level.score.time)) % 60,
+					int(minutes),
+					int(seconds) % 60,
 				)
 				small_array.push_back(&canvas_cache, software_draw_text(&canvas, hud_font, time_str, {2, 2}))
 			}
 			// level begin screen
-			if time.duration_seconds(local_level.score.time) < 2 {
+			if seconds < 2 {
 				tbuf: [16]byte
 				level_str := fmt.bprintf(tbuf[:], "{} {}", language_strings[settings.language][.Level], local_level.current + 1)
 				size := measure_text(general_font, level_str)
@@ -322,12 +323,16 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 			success_x := (canvas.size[0] - success.size[0]) / 2
 			total_h += success.size[1] + (general_font.glyph_size[1] * 2)
 
+			milliseconds := local_level.score.time
+			seconds := milliseconds / 1000
+			minutes := seconds / 60
+
 			tbuf: [64]byte
-			time_str := fmt.bprintf(tbuf[:32], "{}: {:02i}:{:02i}:{:02i}",
+			time_str := fmt.bprintf(tbuf[:32], "{}: {:02i}:{:02i}:{:03i}",
 				language_strings[settings.language][.Time],
-				int(time.duration_minutes(local_level.score.time)),
-				int(time.duration_seconds(local_level.score.time)) % 60,
-				int(time.duration_milliseconds(local_level.score.time)) % 60,
+				int(minutes),
+				int(seconds) % 60,
+				int(milliseconds) % 1000,
 			)
 			time_x, time_h: int
 			{
@@ -372,7 +377,7 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		}
 	}
 
-	fade_alpha := get_fade_alpha(local_world.fade, get_frame_delta(previous_tick, tick_time))
+	fade_alpha := get_fade_alpha(local_world.fade, get_frame_delta(previous_tick	))
 	if fade_alpha != 0 {
 		software_draw_rect(&canvas, {{}, canvas.size}, {0, 0, 0, fade_alpha})
 		small_array.clear(&canvas_cache_slow)
@@ -382,7 +387,7 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 
 	if settings.show_stats {
 		calculate_stats()
-		small_array.push_back(&canvas_cache, software_draw_stats(&canvas))
+		software_draw_stats(&canvas, &canvas_cache)
 	}
 
 	sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
@@ -524,21 +529,26 @@ software_draw_credits :: proc(t: ^Texture2D, language: Language) {
 	software_draw_text(t, general_font, str2, {(t.size[0] - str2_size[0]) / 2, off_y})
 }
 
-software_draw_stats :: proc(t: ^Texture2D) -> Rect {
-	tbuf: [256]byte
-	text := fmt.bprintf(
-		tbuf[:],
-`{}{}
-{}FPS {}ms last
-{}TPS {}ms last`,
-		settings.renderer, "/VSYNC" if settings.vsync else "",
-		u32(math.round(global_state.fps.average)), global_state.last_frame.average,
-		u32(math.round(global_state.tps.average)), global_state.last_update.average,
-	)
+software_draw_stats :: proc(t: ^Texture2D, q: ^Region_Cache) {
+	offset: [2]int = {t.size[0], t.size[1]}
+	offset -= 2
 
-	pos: [2]int = {t.size[0] - 2, t.size[1] - 2}
-	pos -= measure_text(general_font, text)
-	return software_draw_text(t, general_font, text, pos)
+	pos: [2]int = offset
+	draw_stats :: proc(t: ^Texture2D, pos: ^[2]int, format: string, args: ..any) -> Rect {
+		tbuf: [64]byte
+		text := fmt.bprintf(tbuf[:], format, ..args)
+
+		size := measure_text(general_font, text)
+		pos.x -= int(size[0])
+		pos.y -= int(size[1])
+		return software_draw_text(t, general_font, text, {int(pos.x), int(pos.y)})
+	}
+
+	small_array.push_back(q, draw_stats(t, &pos, "{}TPS {}ms last", u32(math.round(global_state.tps.average)), global_state.last_update.average))
+	pos.x = offset.x
+	small_array.push_back(q, draw_stats(t, &pos, "{}FPS {}ms last", u32(math.round(global_state.fps.average)), global_state.last_frame.average))
+	pos.x = offset.x
+	small_array.push_back(q, draw_stats(t, &pos, "{}{}", settings.renderer, "/VSYNC" if settings.vsync else ""))
 }
 
 software_draw_text :: #force_inline proc(
