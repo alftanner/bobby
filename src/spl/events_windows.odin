@@ -94,8 +94,8 @@ _default_window_proc :: proc "stdcall" (winid: win32.HWND, msg: win32.UINT, wpar
 		win32.GetClientRect(winid, &rect)
 
 		window.pos = {cast(int)pos.x, cast(int)pos.y}
-		window.size = {cast(uint)pos.cx, cast(uint)pos.cy}
-		window.client_size = {cast(uint)rect.right, cast(uint)rect.bottom}
+		window.size = {cast(int)pos.cx, cast(int)pos.cy}
+		window.client_size = {cast(int)rect.right, cast(int)rect.bottom}
 	case win32.WM_SYSCOMMAND:
 		switch t := win32.GET_SC_WPARAM(wparam); t {
 		case win32.SC_SIZE:

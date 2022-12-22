@@ -33,20 +33,19 @@ Window :: struct {
 	clear_color: image.RGB_Pixel,
 
 	// read-only
-	pos:                  [2]int,
-	size, client_size:    [2]uint,
-	is_key_down:          [Key_Code]bool,
-	is_mouse_button_down: [Mouse_Button]bool,
-	is_maximized:         bool,
-	is_minimized:         bool,
-	is_fullscreen:        bool,
-	is_focused:           bool,
-	is_mouse_inside:      bool,
-	mode:                 Window_Mode,
+	pos, size, client_size: [2]int,
+	is_key_down:            [Key_Code]bool,
+	is_mouse_button_down:   [Mouse_Button]bool,
+	is_maximized:           bool,
+	is_minimized:           bool,
+	is_fullscreen:          bool,
+	is_focused:             bool,
+	is_mouse_inside:        bool,
+	mode:                   Window_Mode,
 
 	// read-only, not very useful
-	min_size: [2]uint,
-	dec_size: [2]uint, // TODO: remove decorations and use custom window chrome???
+	min_size: [2]int,
+	dec_size: [2]int, // TODO: remove decorations and use custom window chrome???
 	flags:    Window_Flags,
 
 	// internal
@@ -63,15 +62,15 @@ next_event :: #force_inline proc(window: ^Window) -> Event { return _next_event(
 
 send_user_event :: #force_inline proc(window: ^Window, ev: User_Event) { _send_user_event(window, ev) }
 
-get_working_area :: #force_inline proc() -> (pos: [2]int, size: [2]uint) { return _get_working_area() }
+get_working_area :: #force_inline proc() -> (pos: [2]int, size: [2]int) { return _get_working_area() }
 
 move :: #force_inline proc(window: ^Window, pos: [2]int) { _move(window, pos) }
 
-resize :: #force_inline proc(window: ^Window, size: [2]uint) { _resize(window, size) }
+resize :: #force_inline proc(window: ^Window, size: [2]int) { _resize(window, size) }
 
 set_resizable :: #force_inline proc(window: ^Window, resizable: bool) { _set_resizable(window, resizable) }
 
-set_min_size :: #force_inline proc(window: ^Window, size: [2]uint) {
+set_min_size :: #force_inline proc(window: ^Window, size: [2]int) {
 	window.min_size = size
 	_resize(window, window.client_size)
 }

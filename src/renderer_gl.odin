@@ -23,9 +23,6 @@ gl_state: GL_State
 
 textures_index: [Textures]u32
 
-// vertex coordinates of 2 triangles, from top-left
-RECT_VERTICES :: 0b011010_001011
-
 gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	// local world state
 	@static local_world: World
@@ -408,6 +405,15 @@ normalize_vertices :: #force_inline proc(v_hor, v_ver: ^[2]f32) -> (cull: bool) 
 	return
 }
 
+get_rect_vertex :: #force_inline proc(i: uint) -> (hor, ver: int) {
+	// vertex coordinates of 2 triangles, top:left
+	RECT_VERTICES :: 0b001011_011010
+
+	ver = (RECT_VERTICES >> i) & 1
+	hor = (RECT_VERTICES >> (i + 6)) & 1
+	return
+}
+
 gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: bit_set[Flip] = {}, mod: image.RGB_Pixel = {255, 255, 255}) {
 	color := image.RGBA_Pixel{mod.r, mod.g, mod.b, 255}
 
@@ -448,8 +454,7 @@ gl_draw_from_texture :: proc(pos: [2]int, tex: Textures, src_rect: Rect, flip: b
 	}
 
 	for i in uint(0)..<6 {
-		hor := (RECT_VERTICES >> i) & 1
-		ver := (RECT_VERTICES >> (i + 6)) & 1
+		hor, ver := get_rect_vertex(i)
 		gl.TexCoord2f(c_hor[hor], c_ver[ver])
 		gl.Vertex2f(v_hor[hor], v_ver[ver])
 	}
@@ -474,8 +479,7 @@ gl_draw_rect :: proc(rect: Rect, color: image.RGBA_Pixel) {
 	}
 
 	for i in uint(0)..<6 {
-		hor := (RECT_VERTICES >> i) & 1
-		ver := (RECT_VERTICES >> (i + 6)) & 1
+		hor, ver := get_rect_vertex(i)
 		gl.Vertex2f(v_hor[hor], v_ver[ver])
 	}
 }
