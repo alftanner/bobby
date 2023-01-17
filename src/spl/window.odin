@@ -86,7 +86,4 @@ display_pixels :: #force_inline proc(window: ^Window, pixels: [][4]u8, pixels_si
 	_display_pixels(window, pixels, pixels_size, pos, size)
 }
 
-// TODO: bug
-//wait_vblank :: _wait_vblank
-
-wait_vblank :: #force_inline proc() { _wait_vblank() }
+wait_vblank :: #force_inline proc() -> bool { return _wait_vblank() }

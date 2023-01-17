@@ -304,4 +304,6 @@ _display_pixels :: proc(window: ^Window, pixels: [][4]u8, pixels_size: [2]uint, 
 	)
 }
 
-_wait_vblank :: win32.DwmFlush
+_wait_vblank :: proc() -> bool {
+	return win32.DwmFlush() == 0
+}

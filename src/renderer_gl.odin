@@ -50,9 +50,9 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		}
 
 		gl.Enable(gl.BLEND)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		gl.BlendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 
-		gl.set_vsync(.On if settings.vsync else .Off)
+		gl.set_vsync(.Off)
 	}
 
 	start_tick := time.tick_now()
@@ -328,14 +328,14 @@ gl_render :: proc(timer: ^spl.Timer, was_init: bool) {
 	}
 
 	gl_end()
+	gl.swap_buffers(&window)
 
 	sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
-	if !settings.vsync {
+	// NOTE: For VSYNC I use compositor, not OpenGL
+	if !settings.vsync || !spl.wait_vblank() {
 		spl.wait_timer(timer)
 	}
-
-	gl.swap_buffers(&window)
 
 	sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 }

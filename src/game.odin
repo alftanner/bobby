@@ -791,6 +791,13 @@ load_textures :: proc() {
 		pos: [2]int = {idx%ATLAS_TILES_W, idx/ATLAS_TILES_W}
 		sprites[s] = {pos * TILE_SIZE, {TILE_SIZE, TILE_SIZE}}
 	}
+
+	for t in &textures do for p in &t.pixels {
+		a_f32 := f32(p.a) / 255
+		p.r = u8(f32(p.r) * a_f32)
+		p.g = u8(f32(p.g) * a_f32)
+		p.b = u8(f32(p.b) * a_f32)
+	}
 }
 
 copy_level :: proc(dst, src: ^Level, q: ^Tile_Queue) -> (changed: bool) {
@@ -841,13 +848,11 @@ render :: proc(t: ^thread.Thread) {
 	context.logger.procedure = logger_proc
 
 	timer: spl.Timer
-	if !settings.vsync {
-		ok := spl.create_timer(&timer, settings.fps)
-		when ODIN_OS == .Windows {
-			assert(ok, fmt.tprintf("{} Anyways, here is the error code: {}", TIMER_FAIL, spl._windows_get_last_error()))
-		} else {
-			assert(ok, TIMER_FAIL)
-		}
+	ok := spl.create_timer(&timer, settings.fps)
+	when ODIN_OS == .Windows {
+		assert(ok, fmt.tprintf("{} Anyways, here is the error code: {}", TIMER_FAIL, spl._windows_get_last_error()))
+	} else {
+		assert(ok, TIMER_FAIL)
 	}
 
 	load_textures()
@@ -2106,7 +2111,6 @@ _main :: proc(allocator: runtime.Allocator) {
 		case spl.Mouse_Move_Event:
 		case spl.Mouse_Wheel_Event:
 		case spl.User_Event:
-			software_display(cast(^Texture2D)ev.data)
 		}
 	}
 

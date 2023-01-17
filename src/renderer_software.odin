@@ -369,7 +369,7 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		}
 	}
 
-	fade_alpha := get_fade_alpha(local_world.fade, get_frame_delta(previous_tick	))
+	fade_alpha := get_fade_alpha(local_world.fade, get_frame_delta(previous_tick))
 	if fade_alpha != 0 {
 		software_draw_rect(&canvas, {{}, canvas.size}, {0, 0, 0, fade_alpha})
 		small_array.clear(&canvas_cache_slow)
@@ -382,19 +382,15 @@ software_render :: proc(timer: ^spl.Timer, was_init: bool) {
 		software_draw_stats(&canvas, &canvas_cache)
 	}
 
+	software_display(&canvas)
+
 	sync.atomic_store(&global_state.frame_work, time.tick_since(start_tick))
 
-	if settings.vsync {
-		software_display(&canvas)
-		// TODO: if i send the event to another thread, it will block when i exit in 99% of cases
-		//spl.send_user_event(&window, {data = &canvas})
-		spl.wait_vblank()
-		sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
-	} else {
+	if !settings.vsync || !spl.wait_vblank() {
 		spl.wait_timer(timer)
-		sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
-		software_display(&canvas)
 	}
+
+	sync.atomic_store(&global_state.frame_time, time.tick_since(start_tick))
 }
 
 software_display :: proc(canvas: ^Texture2D) {
@@ -553,22 +549,21 @@ software_draw_text :: #force_inline proc(
 }
 
 // blend foreground pixel with alpha onto background
-software_blend_pixel :: proc(bg: ^Color4, fg: Color4) {
+blend_alpha_premul :: proc(bg: ^Color4, fg: Color4) {
 	// NOTE: these do not necesserily correspond to RGBA mapping, colors can be in any order, as long as alpha is at the same place
-	AMASK    :: 0xFF000000
-	GMASK    :: 0x0000FF00
-	AGMASK   :: 0xFF00FF00
-	RBMASK   :: 0x00FF00FF
-	ONEALPHA :: 0x01000000
+	AMASK  :: 0xFF000000
+	GMASK  :: 0x0000FF00
+	RBMASK :: 0x00FF00FF
 
 	p1 := transmute(^u32)bg
 	p2 := transmute(u32)fg
 
-	a := (p2 & AMASK) >> 24
-	inv_a := 255 - a
-	rb := ((inv_a * (p1^ & RBMASK)) + (a * (p2 & RBMASK))) >> 8
-	ag := (inv_a * ((p1^ & AGMASK) >> 8)) + (a * (ONEALPHA | ((p2 & GMASK) >> 8)))
-	p1^ = (rb & RBMASK) | (ag & AGMASK)
+	alpha := u32(p2 & AMASK) >> 24
+	inv_a := 255 - alpha
+	rb := ((inv_a * (p1^ & RBMASK)) >> 8) | (p2 & RBMASK)
+	g  := ((inv_a * (p1^ & GMASK)) >> 8) | (p2 & GMASK)
+	p1^ = (rb & RBMASK) + (g & GMASK)
+	bg.a = 255
 }
 
 software_pixel_mod :: #force_inline proc(dst: ^Color4, mod: Color3) {
@@ -593,7 +588,7 @@ software_draw_from_texture :: proc(dst: ^Texture2D, pos: [2]int, src: Texture2D,
 		dp := y * dst.size[0] + x
 		src_pixel := src.pixels[sp]
 		if needs_mod do software_pixel_mod(&src_pixel, mod_color.rgb)
-		software_blend_pixel(&dst.pixels[dp], src_pixel)
+		blend_alpha_premul(&dst.pixels[dp], src_pixel)
 	}
 }
 
@@ -605,6 +600,6 @@ software_draw_rect :: proc(dst: ^Texture2D, rect: Rect, color: image.RGBA_Pixel)
 
 	for y in max(0, rect.y)..<endy do for x in max(0, rect.x)..<endx {
 		dp := y * dst.size[0] + x
-		software_blend_pixel(&dst.pixels[dp], color)
+		blend_alpha_premul(&dst.pixels[dp], color)
 	}
 }
